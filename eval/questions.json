@@ -1,0 +1,651 @@
+{
+  "_meta": {
+    "name": "FastAPI 中文文档 RAG 评测集",
+    "version": "v1.0",
+    "created": "2026-09-09",
+    "corpus": "FastAPI 官方中文文档（fastapi/fastapi @master, docs/zh/docs）",
+    "corpus_files": 41,
+    "corpus_size": "420KB",
+    "total": 40,
+    "distribution": {
+      "single_hop": 24,
+      "multi_hop": 8,
+      "unanswerable": 8
+    },
+    "usage_note": "gold_doc 指答案所在的源文档；answer_keywords 用于自动验证召回是否命中（Run eval/verify_questions.py 校验）",
+    "design_principle": [
+      "single_hop：答案在单篇文档内可直接找到",
+      "multi_hop：需综合 2 篇以上文档才能完整回答",
+      "unanswerable：语料中确实不存在答案，用于测试拒答率与 Agent 自愈触发"
+    ],
+    "unanswerable_note": "拒答题已逐条人工核对：相关词可能在语料中出现（如 MongoDB 仅作为 Docker 镜像举例），但不构成可回答依据"
+  },
+  "questions": [
+    {
+      "id": 1,
+      "question": "FastAPI 类是从哪个类继承而来的？",
+      "gold_answer": "FastAPI 是直接继承自 Starlette 的类，因此可以通过 FastAPI 使用所有 Starlette 的功能。",
+      "gold_doc": "tutorial__first-steps.md",
+      "answer_keywords": [
+        "Starlette",
+        "继承"
+      ],
+      "type": "single_hop",
+      "difficulty": "easy"
+    },
+    {
+      "id": 2,
+      "question": "FastAPI 自动生成的交互式 API 文档默认访问路径是什么？由什么提供？",
+      "gold_answer": "访问 http://127.0.0.1:8000/docs，由 Swagger UI 提供的自动生成的交互式 API 文档。",
+      "gold_doc": "tutorial__first-steps.md",
+      "answer_keywords": [
+        "/docs",
+        "Swagger UI"
+      ],
+      "type": "single_hop",
+      "difficulty": "easy"
+    },
+    {
+      "id": 3,
+      "question": "除了 /docs 之外，FastAPI 还提供哪种可选的自动文档？访问路径是什么？",
+      "gold_answer": "可选的自动生成文档由 ReDoc 提供，访问路径是 http://127.0.0.1:8000/redoc。",
+      "gold_doc": "tutorial__first-steps.md",
+      "answer_keywords": [
+        "ReDoc",
+        "/redoc"
+      ],
+      "type": "single_hop",
+      "difficulty": "easy"
+    },
+    {
+      "id": 4,
+      "question": "如何查看 FastAPI 自动生成的原始 OpenAPI 模式？",
+      "gold_answer": "直接访问 http://127.0.0.1:8000/openapi.json 可以看到包含所有 API 描述的 JSON 模式。",
+      "gold_doc": "tutorial__first-steps.md",
+      "answer_keywords": [
+        "openapi.json"
+      ],
+      "type": "single_hop",
+      "difficulty": "easy"
+    },
+    {
+      "id": 5,
+      "question": "FastAPI 生成的 openapi.json 中，openapi 版本号是多少？",
+      "gold_answer": "openapi 版本号是 3.1.0。",
+      "gold_doc": "tutorial__first-steps.md",
+      "answer_keywords": [
+        "3.1.0"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 6,
+      "question": "在 HTTP 协议中，POST、GET、PUT、DELETE 四个方法通常分别用于什么操作？",
+      "gold_answer": "POST 用于创建数据，GET 用于读取数据，PUT 用于更新数据，DELETE 用于删除数据。",
+      "gold_doc": "tutorial__first-steps.md",
+      "answer_keywords": [
+        "创建数据",
+        "读取数据",
+        "更新数据",
+        "删除数据"
+      ],
+      "type": "single_hop",
+      "difficulty": "easy"
+    },
+    {
+      "id": 7,
+      "question": "如何在 pyproject.toml 中配置 FastAPI 应用的 entrypoint？",
+      "gold_answer": "在 pyproject.toml 中添加 [tool.fastapi] 段并设置 entrypoint = \"main:app\"，等价于 from main import app。",
+      "gold_doc": "tutorial__first-steps.md",
+      "answer_keywords": [
+        "pyproject.toml",
+        "entrypoint",
+        "tool.fastapi"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 8,
+      "question": "启动 FastAPI 开发服务器和以生产模式运行的命令分别是什么？",
+      "gold_answer": "开发服务器用 fastapi dev，生产模式用 fastapi run。",
+      "gold_doc": "tutorial__first-steps.md",
+      "answer_keywords": [
+        "fastapi dev",
+        "fastapi run"
+      ],
+      "type": "single_hop",
+      "difficulty": "easy"
+    },
+    {
+      "id": 9,
+      "question": "用什么命令可以把 FastAPI 应用部署到 FastAPI Cloud？",
+      "gold_answer": "使用 fastapi deploy 命令，可将应用部署到 FastAPI Cloud。",
+      "gold_doc": "tutorial__first-steps.md",
+      "answer_keywords": [
+        "fastapi deploy",
+        "FastAPI Cloud"
+      ],
+      "type": "single_hop",
+      "difficulty": "easy"
+    },
+    {
+      "id": 10,
+      "question": "FastAPI 中「路径」指的是什么？它还有哪些别称？",
+      "gold_answer": "路径指 URL 中从第一个 / 起的后半部分，例如 https://example.com/items/foo 中路径是 /items/foo；它也常被称为「端点」或「路由」。",
+      "gold_doc": "tutorial__first-steps.md",
+      "answer_keywords": [
+        "从第一个",
+        "后半部分",
+        "端点"
+      ],
+      "type": "single_hop",
+      "difficulty": "easy"
+    },
+    {
+      "id": 11,
+      "question": "FastAPI 支持哪些路径操作装饰器？",
+      "gold_answer": "包括 @app.get()、@app.post()、@app.put()、@app.delete()，以及较少见的 @app.options()、@app.head()、@app.patch()、@app.trace()。",
+      "gold_doc": "tutorial__first-steps.md",
+      "answer_keywords": [
+        "@app.get",
+        "@app.post",
+        "@app.put",
+        "@app.delete"
+      ],
+      "type": "single_hop",
+      "difficulty": "easy"
+    },
+    {
+      "id": 12,
+      "question": "在 FastAPI 中添加 ASGI 中间件推荐用什么方法？为什么？",
+      "gold_answer": "推荐使用 app.add_middleware()，第一个参数是中间件类，其余参数传给中间件；这种方式能让内部中间件在处理服务器错误的同时，还让自定义异常处理器正常运作。",
+      "gold_doc": "advanced__middleware.md",
+      "answer_keywords": [
+        "add_middleware",
+        "第一个参数是中间件的类",
+        "服务器错误"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 13,
+      "question": "HTTPSRedirectMiddleware 的作用是什么？",
+      "gold_answer": "强制所有传入请求必须是 https 或 wss，任何传向 http 或 ws 的请求都会被重定向至安全方案。",
+      "gold_doc": "advanced__middleware.md",
+      "answer_keywords": [
+        "HTTPSRedirectMiddleware",
+        "https",
+        "wss",
+        "重定向"
+      ],
+      "type": "single_hop",
+      "difficulty": "easy"
+    },
+    {
+      "id": 14,
+      "question": "TrustedHostMiddleware 用于防范什么攻击？验证失败时返回什么状态码？",
+      "gold_answer": "用于强制所有传入请求正确设置 Host 请求头，以防 HTTP 主机头攻击；验证不通过时返回 400 响应。",
+      "gold_doc": "advanced__middleware.md",
+      "answer_keywords": [
+        "TrustedHostMiddleware",
+        "主机头攻击",
+        "400"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 15,
+      "question": "TrustedHostMiddleware 的 allowed_hosts 参数如何使用通配符？",
+      "gold_answer": "allowed_hosts 是允许的域名列表，*.example.com 等通配符域名可以匹配子域名；若要允许任意主机名可使用 allowed_hosts=[\"*\"] 或省略此中间件。",
+      "gold_doc": "advanced__middleware.md",
+      "answer_keywords": [
+        "allowed_hosts",
+        "*.example.com",
+        "通配符"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 16,
+      "question": "TrustedHostMiddleware 的 www_redirect 参数默认值是什么？作用是什么？",
+      "gold_answer": "默认值为 True，作用是对允许主机的非 www 版本的请求将被重定向到其 www 版本。",
+      "gold_doc": "advanced__middleware.md",
+      "answer_keywords": [
+        "www_redirect",
+        "True"
+      ],
+      "type": "single_hop",
+      "difficulty": "hard"
+    },
+    {
+      "id": 17,
+      "question": "GZipMiddleware 的 minimum_size 和 compresslevel 参数默认值分别是多少？",
+      "gold_answer": "minimum_size 默认值是 500（小于该字节数的响应不使用 GZip）；compresslevel 默认为 9，取值范围是 1 到 9 的整数。",
+      "gold_doc": "advanced__middleware.md",
+      "answer_keywords": [
+        "minimum_size",
+        "500",
+        "compresslevel",
+        "9"
+      ],
+      "type": "single_hop",
+      "difficulty": "hard"
+    },
+    {
+      "id": 18,
+      "question": "构建 FastAPI 的 Docker 镜像时，官方示例使用的 Python 基础镜像是什么版本？",
+      "gold_answer": "使用 FROM python:3.14 作为基础镜像。",
+      "gold_doc": "deployment__docker.md",
+      "answer_keywords": [
+        "python:3.14",
+        "FROM"
+      ],
+      "type": "single_hop",
+      "difficulty": "easy"
+    },
+    {
+      "id": 19,
+      "question": "Dockerfile 中启动 FastAPI 应用的默认命令是什么？",
+      "gold_answer": "CMD [\"fastapi\", \"run\", \"app/main.py\", \"--port\", \"80\"]。",
+      "gold_doc": "deployment__docker.md",
+      "answer_keywords": [
+        "fastapi run",
+        "app/main.py",
+        "--port 80"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 20,
+      "question": "在 Nginx 或 Traefik 等代理后面运行 FastAPI 容器时，需要添加什么参数？",
+      "gold_answer": "需要在启动命令中添加 --proxy-headers 参数。",
+      "gold_doc": "deployment__docker.md",
+      "answer_keywords": [
+        "--proxy-headers",
+        "Nginx",
+        "Traefik"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 21,
+      "question": "容器（container）和容器镜像（image）的区别是什么？",
+      "gold_answer": "容器镜像是静态版本的文件和元数据，本身不在运行；容器是镜像的实际运行实例，可以创建或修改文件，但更改只存在于该容器中，不会写回底层镜像。",
+      "gold_doc": "deployment__docker.md",
+      "answer_keywords": [
+        "静态",
+        "运行实例",
+        "不会写回"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 22,
+      "question": "如果容器中的主进程停止，容器会怎样？",
+      "gold_answer": "只要主进程在运行容器就在运行，如果主进程停止，容器也会停止；不可能在没有至少一个运行中的进程的情况下让容器保持运行。",
+      "gold_doc": "deployment__docker.md",
+      "answer_keywords": [
+        "主进程",
+        "容器也会停止"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 23,
+      "question": "使用 uv 管理项目时，如何导出 Docker 构建所需的 requirements.txt？",
+      "gold_answer": "使用命令 uv export --format requirements-txt --no-dev --no-emit-project --output-file requirements.txt。",
+      "gold_doc": "deployment__docker.md",
+      "answer_keywords": [
+        "uv export",
+        "requirements-txt",
+        "--no-dev"
+      ],
+      "type": "single_hop",
+      "difficulty": "hard"
+    },
+    {
+      "id": 24,
+      "question": "response_model 参数在 FastAPI 中起到什么作用？",
+      "gold_answer": "用于数据文档、校验，并将输出数据转换并过滤为其类型声明；同时会在 OpenAPI 路径操作中添加 JSON Schema。",
+      "gold_doc": "tutorial__response-model.md",
+      "answer_keywords": [
+        "response_model",
+        "校验",
+        "过滤",
+        "JSON Schema"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 25,
+      "question": "如果同时声明了函数返回类型和 response_model，哪个优先级更高？",
+      "gold_answer": "response_model 会具有优先级并由 FastAPI 使用；也可以使用 response_model=None 来禁用该路径操作的响应模型生成。",
+      "gold_doc": "tutorial__response-model.md",
+      "answer_keywords": [
+        "response_model",
+        "优先级",
+        "response_model=None"
+      ],
+      "type": "single_hop",
+      "difficulty": "hard"
+    },
+    {
+      "id": 26,
+      "question": "response_model 是路径操作函数的参数还是装饰器的参数？",
+      "gold_answer": "response_model 是装饰器方法（get、post 等）的一个参数，不是路径操作函数的参数。",
+      "gold_doc": "tutorial__response-model.md",
+      "answer_keywords": [
+        "装饰器",
+        "不是",
+        "路径操作函数"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 27,
+      "question": "FastAPI 使用的 Pydantic 是用什么语言编写的？带来什么好处？",
+      "gold_answer": "Pydantic 使用 Rust 编写，因此序列化会快很多。",
+      "gold_doc": "tutorial__response-model.md",
+      "answer_keywords": [
+        "Pydantic",
+        "Rust",
+        "快"
+      ],
+      "type": "single_hop",
+      "difficulty": "hard"
+    },
+    {
+      "id": 28,
+      "question": "为什么从环境变量读取的值在 Python 中都是字符串类型？",
+      "gold_answer": "因为环境变量存在于 Python 代码之外、操作系统中，必须与其他程序及不同操作系统兼容，只能处理文本字符串；到其它类型的转换或验证都必须在代码中完成。",
+      "gold_doc": "advanced__settings.md",
+      "answer_keywords": [
+        "环境变量",
+        "字符串",
+        "str",
+        "转换"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 29,
+      "question": "如何使用 Pydantic 管理应用设置和环境变量？",
+      "gold_answer": "从 Pydantic 导入 BaseSettings 并创建一个子类，用类型注解声明类属性并可指定默认值；Pydantic 会以不区分大小写的方式读取环境变量。",
+      "gold_doc": "advanced__settings.md",
+      "answer_keywords": [
+        "BaseSettings",
+        "pydantic-settings",
+        "不区分大小写"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 30,
+      "question": "安装 pydantic-settings 的命令是什么？通过哪种方式会一并安装？",
+      "gold_answer": "使用 uv add pydantic-settings 安装；当用 uv add \"fastapi[all]\" 安装 all 扩展时，它也会被一并安装。",
+      "gold_doc": "advanced__settings.md",
+      "answer_keywords": [
+        "uv add pydantic-settings",
+        "fastapi[all]"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 31,
+      "question": "使用 uv 为 FastAPI 项目添加依赖的命令示例是什么？",
+      "gold_answer": "使用 uv add \"fastapi[standard]\" pydantic。",
+      "gold_doc": "deployment__docker.md",
+      "answer_keywords": [
+        "uv add",
+        "fastapi[standard]"
+      ],
+      "type": "single_hop",
+      "difficulty": "easy"
+    },
+    {
+      "id": 32,
+      "question": "FastAPI 中「模式（schema）」这个术语有哪些含义？",
+      "gold_answer": "一是对事物的定义或描述，并非具体实现代码；API 模式下指 OpenAPI 规范规定的 API 路径与参数定义；数据模式下指 JSON 的属性及其数据类型等结构。",
+      "gold_doc": "tutorial__first-steps.md",
+      "answer_keywords": [
+        "模式",
+        "OpenAPI",
+        "JSON",
+        "定义或描述"
+      ],
+      "type": "single_hop",
+      "difficulty": "hard"
+    },
+    {
+      "id": 33,
+      "question": "ASGI 中间件本质上是怎样的对象？",
+      "gold_answer": "ASGI 中间件是类，并把 ASGI 应用作为第一个参数；只要遵循 ASGI 规范，不必专为 FastAPI 或 Starlette 定制就能使用。",
+      "gold_doc": "advanced__middleware.md",
+      "answer_keywords": [
+        "ASGI",
+        "类",
+        "第一个参数"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 34,
+      "question": "容器相比虚拟机为什么更轻量？",
+      "gold_answer": "因为 Linux 容器复用宿主机（物理机、虚拟机、云服务器等）的同一个 Linux 内核，而虚拟机会模拟整个操作系统，因此容器消耗的资源很少，大致相当于直接运行进程。",
+      "gold_doc": "deployment__docker.md",
+      "answer_keywords": [
+        "复用",
+        "内核",
+        "轻量"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 35,
+      "question": "要部署一个强制使用 HTTPS 且对响应启用 GZip 压缩的 FastAPI 应用，需要添加哪些中间件？",
+      "gold_answer": "需要添加 HTTPSRedirectMiddleware（强制 https/wss）和 GZipMiddleware（处理 Accept-Encoding 含 gzip 的请求），都通过 app.add_middleware() 添加。",
+      "gold_doc": "advanced__middleware.md",
+      "answer_keywords": [
+        "HTTPSRedirectMiddleware",
+        "GZipMiddleware",
+        "add_middleware"
+      ],
+      "type": "multi_hop",
+      "difficulty": "hard"
+    },
+    {
+      "id": 36,
+      "question": "如何配置一个既能被 VS Code 扩展识别、又能通过 fastapi dev 运行的 FastAPI 应用入口？",
+      "gold_answer": "推荐在 pyproject.toml 中配置 [tool.fastapi] entrypoint（如 main:app 或 backend.main:app），这样 VS Code 扩展和 FastAPI Cloud 等工具都能找到它，无需每次手动传 --entrypoint。",
+      "gold_doc": "tutorial__first-steps.md",
+      "answer_keywords": [
+        "pyproject.toml",
+        "entrypoint",
+        "VS Code",
+        "--entrypoint"
+      ],
+      "type": "multi_hop",
+      "difficulty": "hard"
+    },
+    {
+      "id": 37,
+      "question": "从零构建一个可部署的 FastAPI 容器镜像，完整流程需要哪些关键步骤？",
+      "gold_answer": "用 uv 添加依赖并导出 requirements.txt；编写 Dockerfile 基于 python:3.14，设置 WORKDIR /code，复制 requirements.txt 并安装，复制 app 目录；用 CMD [\"fastapi\", \"run\", \"app/main.py\", \"--port\", \"80\"] 启动，若在代理后运行需加 --proxy-headers。",
+      "gold_doc": "deployment__docker.md",
+      "answer_keywords": [
+        "uv export",
+        "python:3.14",
+        "WORKDIR",
+        "CMD",
+        "--proxy-headers"
+      ],
+      "type": "multi_hop",
+      "difficulty": "hard"
+    },
+    {
+      "id": 38,
+      "question": "TrustedHostMiddleware 和 HTTPSRedirectMiddleware 分别解决什么安全问题？",
+      "gold_answer": "TrustedHostMiddleware 强制请求必须正确设置 Host 头以防 HTTP 主机头攻击，失败返回 400；HTTPSRedirectMiddleware 强制请求必须是 https 或 wss，将 http/ws 请求重定向到安全方案。",
+      "gold_doc": "advanced__middleware.md",
+      "answer_keywords": [
+        "主机头攻击",
+        "400",
+        "https",
+        "wss",
+        "重定向"
+      ],
+      "type": "multi_hop",
+      "difficulty": "hard"
+    },
+    {
+      "id": 39,
+      "question": "在 FastAPI 中既想限制响应输出的字段、又想让类型检查工具不报错，应该怎么做？",
+      "gold_answer": "使用装饰器参数 response_model 来限制和过滤输出字段，同时把函数返回类型声明为 Any，这样 mypy 等工具不会报错，FastAPI 仍会用 response_model 做校验和过滤。",
+      "gold_doc": "tutorial__response-model.md",
+      "answer_keywords": [
+        "response_model",
+        "Any",
+        "mypy",
+        "过滤"
+      ],
+      "type": "multi_hop",
+      "difficulty": "hard"
+    },
+    {
+      "id": 40,
+      "question": "Docker 容器中如何为 FastAPI 应用注入数据库 URL 等敏感配置？",
+      "gold_answer": "通过环境变量注入；应用侧用 Pydantic 的 BaseSettings 子类声明配置属性，Pydantic 会以不区分大小写的方式读取环境变量并完成类型转换与验证。",
+      "gold_doc": "advanced__settings.md",
+      "answer_keywords": [
+        "环境变量",
+        "BaseSettings",
+        "不区分大小写",
+        "敏感"
+      ],
+      "type": "multi_hop",
+      "difficulty": "hard"
+    },
+    {
+      "id": 41,
+      "question": "容器镜像启动后对文件的修改会持久化到镜像中吗？为什么？",
+      "gold_answer": "不会。容器启动后创建或修改的文件、环境变量等只存在于该容器中，不会持久化到底层的容器镜像中（不会写回磁盘）。",
+      "gold_doc": "deployment__docker.md",
+      "answer_keywords": [
+        "不会持久化",
+        "只存在于该容器",
+        "不会写回"
+      ],
+      "type": "single_hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": 42,
+      "question": "FastAPI 应用返回数据无效（例如缺少字段）时会发生什么？",
+      "gold_answer": "这意味着应用代码有问题、没有返回应有的数据，FastAPI 将返回服务器错误而不是返回错误的数据，以保证客户端能收到期望的数据结构。",
+      "gold_doc": "tutorial__response-model.md",
+      "answer_keywords": [
+        "服务器错误",
+        "缺少",
+        "校验"
+      ],
+      "type": "single_hop",
+      "difficulty": "hard"
+    },
+    {
+      "id": 43,
+      "question": "如何在 FastAPI 中集成 Celery 实现异步任务队列？",
+      "gold_answer": "UNANSWERABLE：该语料中不包含 Celery 集成相关内容。",
+      "gold_doc": null,
+      "answer_keywords": [],
+      "type": "unanswerable",
+      "difficulty": "medium",
+      "human_verified": true
+    },
+    {
+      "id": 44,
+      "question": "FastAPI 如何将用户上传的文件直接存储到 AWS S3？",
+      "gold_answer": "UNANSWERABLE：该语料中不包含对象存储 S3 集成相关内容。",
+      "gold_doc": null,
+      "answer_keywords": [],
+      "type": "unanswerable",
+      "difficulty": "medium",
+      "human_verified": true
+    },
+    {
+      "id": 45,
+      "question": "FastAPI 中如何使用 Strawberry 实现 GraphQL 接口？",
+      "gold_answer": "UNANSWERABLE：语料仅提及 GraphQL 通常都用 POST 方法，未讲具体实现。",
+      "gold_doc": null,
+      "answer_keywords": [],
+      "type": "unanswerable",
+      "difficulty": "medium",
+      "human_verified": true
+    },
+    {
+      "id": 46,
+      "question": "如何为 FastAPI 接口添加限流（rate limiting）功能？",
+      "gold_answer": "UNANSWERABLE：该语料中不包含限流相关实现内容。",
+      "gold_doc": null,
+      "answer_keywords": [],
+      "type": "unanswerable",
+      "difficulty": "medium",
+      "human_verified": true
+    },
+    {
+      "id": 47,
+      "question": "FastAPI 如何实现多租户（multi-tenant）架构？",
+      "gold_answer": "UNANSWERABLE：该语料中不包含多租户架构相关内容。",
+      "gold_doc": null,
+      "answer_keywords": [],
+      "type": "unanswerable",
+      "difficulty": "hard",
+      "human_verified": true
+    },
+    {
+      "id": 48,
+      "question": "FastAPI 应用如何连接并操作 MongoDB 数据库？",
+      "gold_answer": "UNANSWERABLE：语料仅在 Docker 章节举例提到 MongoDB 官方镜像，未讲 FastAPI 如何连接。",
+      "gold_doc": null,
+      "answer_keywords": [],
+      "type": "unanswerable",
+      "difficulty": "medium",
+      "human_verified": true
+    },
+    {
+      "id": 49,
+      "question": "如何为 FastAPI 应用配置 Prometheus 监控指标？",
+      "gold_answer": "UNANSWERABLE：该语料中不包含 Prometheus 监控相关内容。",
+      "gold_doc": null,
+      "answer_keywords": [],
+      "type": "unanswerable",
+      "difficulty": "medium",
+      "human_verified": true
+    },
+    {
+      "id": 50,
+      "question": "FastAPI 项目中如何做接口的 A/B 测试？",
+      "gold_answer": "UNANSWERABLE：该语料中不包含 A/B 测试相关内容。",
+      "gold_doc": null,
+      "answer_keywords": [],
+      "type": "unanswerable",
+      "difficulty": "medium",
+      "human_verified": true
+    }
+  ]
+}
