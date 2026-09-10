@@ -8,14 +8,14 @@
 - 压缩多余空行
 
 用法：python scripts/clean_corpus.py
-输出：data/clean/（清洗后的纯净 markdown）
+输出：corpus/clean/（清洗后的纯净 markdown）
 """
 import os, re
 
 # 动态定位项目根目录，避免路径写死导致换机器就跑不了
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RAW = os.path.join(ROOT, "data", "raw")
-OUT = os.path.join(ROOT, "data", "clean")
+RAW = os.path.join(ROOT, "corpus", "raw")
+OUT = os.path.join(ROOT, "corpus", "clean")
 os.makedirs(OUT, exist_ok=True)
 
 PATTERNS = [

@@ -52,6 +52,12 @@ def main():
     print("阶段 1：文档切片 + 双存储入库")
     print("=" * 68)
     print(config.summary())
+    errs = config.validate()
+    if errs:
+        print("\n✗ 配置检查未通过：")
+        for e in errs:
+            print(f"  - {e}")
+        sys.exit(1)
     print(f"切片策略    : {args.strategy}")
     print("=" * 68)
 

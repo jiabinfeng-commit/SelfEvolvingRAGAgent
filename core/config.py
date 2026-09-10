@@ -3,52 +3,122 @@
 全局配置
 
 设计原则：
-- 所有路径/凭据都可用环境变量覆盖，方便本地开发与云上部署切换
-- 不把密码硬编码在业务代码里（这里填的是云上开发库的默认值）
+- 凭据/路径/运行参数都可用环境变量覆盖
+- 优先级：环境变量 > .env 文件 > 代码内默认（仅非敏感字段有默认）
+- 凭据不进代码，必须从 .env 读；.env 本身不进 git
+
+.env 文件约定：
+  - 项目根放一份 .env（含真实密码，仅本机可见）
+  - 同一目录放 .env.example（只含键名 + 注释，可入仓作模板）
+  - .env 已加入 .gitignore
 """
 import os
+import sys
 
-# ---------- 项目根目录（云上为 /opt/rag-agent/app） ----------
-BASE_DIR = os.getenv("RAG_BASE_DIR", "/opt/rag-agent")
+# ---------- 加载 .env ----------
+try:
+    from dotenv import load_dotenv
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    # 按这个顺序找：仓库根、app 同级、当前工作目录
+    for _p in [
+        os.path.join(_HERE, "..", ".env"),
+        os.path.join(_HERE, ".env"),
+        os.path.join(os.getcwd(), ".env"),
+    ]:
+        if os.path.isfile(_p):
+            load_dotenv(_p, override=False)
+            break
+except ImportError:
+    pass
+
+
+def _get(name: str, default):
+    """
+    os.getenv 的加强版：「环境变量存在但为空」与「未设置」都走 default。
+    dotenv 会把 .env 里的 `KEY=` 解析成空串，这两种情况我们应该一致对待。
+    """
+    v = os.getenv(name)
+    if v:                       # 非空走真值
+        return v
+    if v is None:               # 未设置
+        return default
+    return default              # 设了但是空 → 走 default
+
+
+def _getint(name: str, default: int) -> int:
+    v = _get(name, None)
+    if v is None:
+        return default
+    return int(v)
+
+
+# ---------- 项目根目录 ----------
+# 优先级：环境变量 > /opt/rag-agent（云上标志位）> 仓库根（本地 = core 的父目录）
+_LOCAL_DEFAULT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if os.getenv("RAG_BASE_DIR"):
+    BASE_DIR = os.environ["RAG_BASE_DIR"]
+elif os.path.isdir("/opt/rag-agent"):
+    BASE_DIR = "/opt/rag-agent"
+else:
+    BASE_DIR = _LOCAL_DEFAULT
 
 # ---------- 语料 ----------
-CORPUS_DIR = os.getenv("RAG_CORPUS_DIR", os.path.join(BASE_DIR, "corpus", "clean"))
+CORPUS_DIR = _get(
+    "RAG_CORPUS_DIR",
+    os.path.join(BASE_DIR, "corpus", "clean"),
+)
 
 # ---------- PostgreSQL（存 chunk 原文与元数据） ----------
-PG_HOST = os.getenv("PG_HOST", "localhost")
-PG_PORT = int(os.getenv("PG_PORT", "5432"))
-PG_DB = os.getenv("PG_DB", "rag")
-PG_USER = os.getenv("PG_USER", "rag")
-PG_PASSWORD = os.getenv("PG_PASSWORD", "rag_dev_2026")
+# 非敏感字段保留默认值；密码等敏感字段无默认，缺了直接报错（见 validate()）
+PG_HOST = _get("PG_HOST", "localhost")
+PG_PORT = _getint("PG_PORT", 5432)
+PG_DB = _get("PG_DB", "rag")
+PG_USER = _get("PG_USER", "rag")
+PG_PASSWORD = _get("PG_PASSWORD", "")       # ← 不再硬编码
 
 # ---------- Milvus Lite（只存向量） ----------
-MILVUS_PATH = os.getenv("MILVUS_PATH", os.path.join(BASE_DIR, "data", "milvus.db"))
-COLLECTION_NAME = os.getenv("MILVUS_COLLECTION", "chunks")
+MILVUS_PATH = _get("MILVUS_PATH", os.path.join(BASE_DIR, "data", "milvus.db"))
+COLLECTION_NAME = _get("MILVUS_COLLECTION", "chunks")
 
 # ---------- Embedding ----------
 # bge-small-zh-v1.5：512 维，约 100MB，中文效果好且轻量
 #
 # 国内机器访问 huggingface.co 不通，模型由 scripts/fetch_model.py 从
-# ModelScope 预先下载到本地。这里优先用本地目录，不存在时再退回 HF 官方 id
-# （本地开发机有代理时可以走网络）。
-MODEL_ROOT = os.getenv("MODEL_ROOT", os.path.join(BASE_DIR, "models"))
+# ModelScope 预先下载到本地。这里优先用本地目录，不存在时再退回 HF 官方 id。
+MODEL_ROOT = _get("MODEL_ROOT", os.path.join(BASE_DIR, "models"))
 _LOCAL_EMBED = os.path.join(MODEL_ROOT, "BAAI__bge-small-zh-v1.5")
-EMBED_MODEL = os.getenv(
+EMBED_MODEL = _get(
     "EMBED_MODEL",
     _LOCAL_EMBED if os.path.isdir(_LOCAL_EMBED) else "BAAI/bge-small-zh-v1.5",
 )
-EMBED_DIM = int(os.getenv("EMBED_DIM", "512"))
-EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "32"))
+EMBED_DIM = _getint("EMBED_DIM", 512)
+EMBED_BATCH_SIZE = _getint("EMBED_BATCH_SIZE", 32)
 
 # bge 系列做检索时，查询侧建议加这句前缀（官方推荐，能小幅提升召回）
-QUERY_PREFIX = os.getenv("QUERY_PREFIX", "为这个句子生成表示以用于检索相关文章：")
+QUERY_PREFIX = _get("QUERY_PREFIX", "为这个句子生成表示以用于检索相关文章：")
+
+
+# ---------- 校验 ----------
+def validate() -> list:
+    """
+    检查启动必需的配置，缺失项返回错误列表。
+    应在 main 入口开头调用，让错误早点暴露。
+    """
+    errs = []
+    if not PG_PASSWORD:
+        errs.append("PG_PASSWORD 未设置（请在 .env 或环境变量里填）")
+    if not os.path.isdir(CORPUS_DIR):
+        errs.append(f"语料目录不存在: {CORPUS_DIR}")
+    if not os.path.isdir(EMBED_MODEL) and not EMBED_MODEL.startswith(("BAAI/", "./", "/")):
+        errs.append(f"EMBED_MODEL 路径不存在且不是已知的 HF id: {EMBED_MODEL}")
+    return errs
 
 
 def summary() -> str:
     """打印配置摘要（隐藏密码）"""
     return (
         f"语料目录    : {CORPUS_DIR}\n"
-        f"PostgreSQL  : {PG_USER}@{PG_HOST}:{PG_PORT}/{PG_DB}\n"
+        f"PostgreSQL  : {PG_USER}:****@{PG_HOST}:{PG_PORT}/{PG_DB}\n"
         f"Milvus Lite : {MILVUS_PATH} (collection={COLLECTION_NAME})\n"
         f"Embedding   : {EMBED_MODEL} ({EMBED_DIM} 维)"
     )
@@ -56,3 +126,10 @@ def summary() -> str:
 
 if __name__ == "__main__":
     print(summary())
+    errs = validate()
+    if errs:
+        print("\n配置错误：")
+        for e in errs:
+            print(f"  ✗ {e}")
+        sys.exit(1)
+    print("\n配置 OK ✓")

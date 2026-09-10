@@ -68,6 +68,13 @@ def main():
     if not args.question and not args.eval:
         ap.error("给一个问题，或者加 --eval")
 
+    errs = config.validate()
+    if errs:
+        print("✗ 配置检查未通过：")
+        for e in errs:
+            print(f"  - {e}")
+        sys.exit(1)
+
     print("加载模型 ...", end="", flush=True)
     t0 = time.time()
     emb = get_embedder("bge")
