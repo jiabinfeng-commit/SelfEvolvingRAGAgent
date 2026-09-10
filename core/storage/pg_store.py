@@ -40,6 +40,52 @@ CREATE TABLE IF NOT EXISTS chunk (
 
 CREATE INDEX IF NOT EXISTS idx_chunk_doc   ON chunk(doc_id);
 CREATE INDEX IF NOT EXISTS idx_chunk_meta ON chunk USING GIN (meta);
+
+-- 阶段 2：问答日志。每问一次就落一条，方便复盘"召回了什么 / 模型答了什么"
+CREATE TABLE IF NOT EXISTS qa_log (
+    id            SERIAL PRIMARY KEY,
+    question      TEXT        NOT NULL,
+    answer        TEXT        NOT NULL,
+    ctx_chunk_ids TEXT[]      NOT NULL DEFAULT '{}',   -- 召回的 chunk_id（按相关度从高到低）
+    ctx_scores    REAL[]      NOT NULL DEFAULT '{}',   -- 对应的相似度分数
+    model         VARCHAR(64) NOT NULL DEFAULT '',
+    backend       VARCHAR(20) NOT NULL DEFAULT '',
+    latency_s     REAL        DEFAULT 0,               -- LLM 生成耗时（秒）
+    created_at    TIMESTAMP   DEFAULT NOW()
+);
+
+-- 阶段 3：评估闭环。每次跑评估落一条 run + 每题一条 result，供自进化横向对比
+CREATE TABLE IF NOT EXISTS eval_run (
+    id            SERIAL PRIMARY KEY,
+    created_at    TIMESTAMP   DEFAULT NOW(),
+    model         VARCHAR(64) NOT NULL DEFAULT '',
+    backend       VARCHAR(20) NOT NULL DEFAULT '',
+    top_k         INTEGER     NOT NULL DEFAULT 5,
+    n_questions   INTEGER     NOT NULL DEFAULT 0,
+    accuracy      REAL        DEFAULT 0,               -- 正确率(裁判打分=2)
+    partial_rate  REAL        DEFAULT 0,               -- 部分正确率(裁判=1)
+    refusal_rate  REAL        DEFAULT NULL,            -- 拒答正确率(仅 unanswerable 题)
+    recall_top1   REAL        DEFAULT 0,               -- 检索 top1 命中率
+    recall_top3   REAL        DEFAULT 0,               -- 检索 top3 命中率
+    avg_latency_s REAL        DEFAULT 0,
+    note          TEXT        DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS eval_result (
+    id            SERIAL PRIMARY KEY,
+    run_id        INTEGER     NOT NULL REFERENCES eval_run(id) ON DELETE CASCADE,
+    qid           INTEGER,
+    question      TEXT,
+    qtype         VARCHAR(20),
+    gold_doc      VARCHAR(255),
+    generated     TEXT,
+    judge_score   INTEGER,
+    judge_label   VARCHAR(20),
+    judge_reason  TEXT,
+    recall_top1   BOOLEAN,
+    recall_top3   BOOLEAN,
+    latency_s     REAL
+);
 """
 
 
@@ -135,6 +181,69 @@ class PGStore:
             cur.execute("SELECT * FROM document WHERE doc_id = %s", (doc_id,))
             row = cur.fetchone()
         return dict(row) if row else None
+
+    # ---------------- 阶段 2：问答落库 ----------------
+    def save_qa(self, question: str, answer: str,
+                ctx_chunk_ids: List[str], ctx_scores: List[float],
+                model: str = "", backend: str = "", latency_s: float = 0.0):
+        """
+        把一次问答写入 qa_log（阶段 2 闭环的"答案落库"那一步）。
+
+        存召回的 chunk_id + 分数，是为了事后能复盘：
+        "用户问 X，当时召回的是哪些块、相似度多少、模型最终答了什么"，
+        这对分析 RAG 效果、定位"答非所问"的根因非常关键。
+        """
+        sql = """
+            INSERT INTO qa_log
+                (question, answer, ctx_chunk_ids, ctx_scores, model, backend, latency_s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(sql, (
+                question, answer,
+                list(ctx_chunk_ids), list(ctx_scores),
+                model, backend, latency_s,
+            ))
+        self.conn.commit()
+
+    # ---------------- 阶段 3：评估落库 ----------------
+    def save_eval(self, model: str, backend: str, top_k: int,
+                  summary: Dict, results: List[Dict], note: str = ""):
+        """
+        把一次评估写入 eval_run（汇总）+ eval_result（逐题），供自进化横向对比。
+
+        eval_run 存这一跑的整体指标；eval_result 存每题的「生成答案 + 裁判评分 + 召回命中」，
+        以后优化检索/ prompt / 模型时，直接 SELECT 两次 run 的 accuracy / recall 比高低。
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO eval_run
+                   (model, backend, top_k, n_questions, accuracy, partial_rate,
+                    refusal_rate, recall_top1, recall_top3, avg_latency_s, note)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (model, backend, top_k, summary["n"], summary["accuracy"],
+                 summary["partial_rate"], summary["refusal_rate"],
+                 summary["recall_top1"], summary["recall_top3"],
+                 summary["avg_latency_s"], note),
+            )
+            run_id = cur.fetchone()[0]
+            rows = [
+                (run_id, r.get("qid"), r.get("question"), r.get("qtype"),
+                 r.get("gold_doc"), r.get("generated"), r.get("judge_score"),
+                 r.get("judge_label"), r.get("judge_reason"),
+                 r.get("recall_top1"), r.get("recall_top3"), r.get("latency_s"))
+                for r in results
+            ]
+            psycopg2.extras.execute_batch(
+                cur,
+                """INSERT INTO eval_result
+                   (run_id, qid, question, qtype, gold_doc, generated,
+                    judge_score, judge_label, judge_reason, recall_top1, recall_top3, latency_s)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                rows, page_size=50,
+            )
+        self.conn.commit()
+        return run_id
 
     def close(self):
         self.conn.close()

@@ -97,6 +97,21 @@ EMBED_BATCH_SIZE = _getint("EMBED_BATCH_SIZE", 32)
 # bge 系列做检索时，查询侧建议加这句前缀（官方推荐，能小幅提升召回）
 QUERY_PREFIX = _get("QUERY_PREFIX", "为这个句子生成表示以用于检索相关文章：")
 
+# ---------- LLM（阶段 2：检索到上下文后，用它生成最终答案） ----------
+# 后端可切换：
+#   ollama  —— 本地免费（默认），需要本机起了 Ollama 服务
+#   openai  —— 任意 OpenAI 兼容 API（如 gpt-4o-mini、DeepSeek、通义百炼等），需要 API Key
+LLM_BACKEND = _get("LLM_BACKEND", "openai")
+# ollama 模式填模型名（如 qwen3.7-max / llama3）；openai 模式填模型 id（如 gpt-4o-mini）
+LLM_MODEL = _get("LLM_MODEL", "qwen3.7-max")
+OLLAMA_URL = _get("OLLAMA_URL", "http://localhost:11434")
+OPENAI_API_KEY = _get("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = _get("OPENAI_BASE_URL", "")
+# 召回多少块拼进 prompt（阶段 2 的 top-k）
+RAG_TOP_K = _getint("RAG_TOP_K", 5)
+# 单块上下文拼进 prompt 时的最大字符数（避免 prompt 过长把无关内容塞进来）
+RAG_CONTEXT_MAX_CHARS = _getint("RAG_CONTEXT_MAX_CHARS", 1200)
+
 
 # ---------- 校验 ----------
 def validate() -> list:
@@ -111,6 +126,11 @@ def validate() -> list:
         errs.append(f"语料目录不存在: {CORPUS_DIR}")
     if not os.path.isdir(EMBED_MODEL) and not EMBED_MODEL.startswith(("BAAI/", "./", "/")):
         errs.append(f"EMBED_MODEL 路径不存在且不是已知的 HF id: {EMBED_MODEL}")
+    # 阶段 2 新增：LLM 后端合法性校验
+    if LLM_BACKEND not in ("ollama", "openai"):
+        errs.append(f"未知 LLM_BACKEND: {LLM_BACKEND}（可选 ollama / openai）")
+    if LLM_BACKEND == "openai" and not OPENAI_API_KEY:
+        errs.append("LLM_BACKEND=openai 时需要设置 OPENAI_API_KEY")
     return errs
 
 
@@ -120,7 +140,8 @@ def summary() -> str:
         f"语料目录    : {CORPUS_DIR}\n"
         f"PostgreSQL  : {PG_USER}:****@{PG_HOST}:{PG_PORT}/{PG_DB}\n"
         f"Milvus Lite : {MILVUS_PATH} (collection={COLLECTION_NAME})\n"
-        f"Embedding   : {EMBED_MODEL} ({EMBED_DIM} 维)"
+        f"Embedding   : {EMBED_MODEL} ({EMBED_DIM} 维)\n"
+        f"LLM         : {LLM_BACKEND} / {LLM_MODEL}"
     )
 
 

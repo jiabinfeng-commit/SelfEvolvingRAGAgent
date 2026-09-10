@@ -3,10 +3,14 @@
 入库脚本：语料 → 切片 → embedding → 双存储
 
 用法：
-    python scripts/ingest.py                      # 默认结构化切片
-    python scripts/ingest.py --strategy fixed     # 固定长度切片
-    python scripts/ingest.py --limit 5            # 只处理 5 篇（调试用）
-    python scripts/ingest.py --rebuild            # 清空重来
+    python scripts/ingest.py                         # 默认递归字符切片（格式无关，任意文件都能切）
+    python scripts/ingest.py --strategy structural   # markdown 标题切片（仅当文档有标题时更优）
+    python scripts/ingest.py --strategy fixed        # 固定长度切片（朴素 baseline）
+    python scripts/ingest.py --limit 5               # 只处理前 5 个文件（调试用）
+    python scripts/ingest.py --rebuild               # 清空向量集合后重建
+
+语料目录里的文件不再限于 .md：md / txt / html / pdf / docx 等都会被
+chunker.parse_file() 抽成纯文本后再切块（见 core/chunker.py）。
 """
 import os
 import sys
@@ -17,21 +21,36 @@ import hashlib
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import config
-from core.chunker import get_chunker, Chunk
+from core.chunker import get_chunker, Chunk, parse_file, SUPPORTED_EXTENSIONS
 from core.embedder import get_embedder
 from core.storage.pg_store import PGStore
 from core.storage.vec_store import VecStore
 
 
 def load_corpus(corpus_dir: str, limit: int = None):
-    """读取语料目录下所有 md 文件，返回 [(doc_id, doc_name, text), ...]"""
+    """
+    读取语料目录下【所有支持格式】的文件，返回 [(doc_id, doc_name, text), ...]
+
+    关键点：不再只认 .md。每个文件先交给 chunker.parse_file() 抽成纯文本，
+    切片器再对纯文本切块——这样 PDF / Word / HTML / Markdown 走同一条流水线。
+    不支持或读取失败的文件会打印警告并跳过，不中断整体入库。
+    doc_id 仍由文件名 md5 生成（稳定，便于幂等重入库）。
+    """
     docs = []
     for fn in sorted(os.listdir(corpus_dir)):
-        if not fn.endswith(".md"):
-            continue
         path = os.path.join(corpus_dir, fn)
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
+        if not os.path.isfile(path):
+            continue
+        ext = os.path.splitext(fn)[1].lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            continue  # 非支持格式，跳过
+        try:
+            text = parse_file(path)
+        except Exception as e:
+            print(f"  ⚠ 跳过 {fn}：{e}")
+            continue
+        if not text.strip():
+            continue
         doc_id = hashlib.md5(fn.encode("utf-8")).hexdigest()[:16]
         docs.append((doc_id, fn, text))
         if limit and len(docs) >= limit:
@@ -41,8 +60,9 @@ def load_corpus(corpus_dir: str, limit: int = None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--strategy", default="structural", choices=["fixed", "structural"],
-                    help="切片策略")
+    ap.add_argument("--strategy", default="recursive",
+                    choices=["recursive", "fixed", "structural"],
+                    help="切片策略：recursive(默认,格式无关) / fixed / structural")
     ap.add_argument("--limit", type=int, default=None, help="只处理前 N 篇文档")
     ap.add_argument("--rebuild", action="store_true", help="清空向量集合后重建")
     ap.add_argument("--corpus", default=config.CORPUS_DIR, help="语料目录")
