@@ -52,6 +52,14 @@ def _getint(name: str, default: int) -> int:
     return int(v)
 
 
+def _getbool(name: str, default: bool) -> bool:
+    """读布尔配置：true/yes/on/1 视为真，其余（含未设置/空）走 default。"""
+    v = _get(name, None)
+    if v is None:
+        return default
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
 # ---------- 项目根目录 ----------
 # 优先级：环境变量 > /opt/rag-agent（云上标志位）> 仓库根（本地 = core 的父目录）
 _LOCAL_DEFAULT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -80,6 +88,23 @@ PG_PASSWORD = _get("PG_PASSWORD", "")       # ← 不再硬编码
 MILVUS_PATH = _get("MILVUS_PATH", os.path.join(BASE_DIR, "data", "milvus.db"))
 COLLECTION_NAME = _get("MILVUS_COLLECTION", "chunks")
 
+# ---------- HuggingFace 镜像 ----------
+# 国内直连 huggingface.co 不通（实测 6s 超时、一个字节都收不到），
+# 于是 sentence-transformers / huggingface_hub 任何"去 HF 取模型"的动作都会卡死。
+# 默认切到 hf-mirror.com 这个社区镜像；要切回官方源，在 .env 里写：
+#     HF_ENDPOINT=https://huggingface.co
+#
+# 【为什么必须写在这里、而且必须写进 os.environ】
+# huggingface_hub 是在 import 时就读取 HF_ENDPOINT 决定下载地址的，
+# 之后再改 os.environ 就不生效了。而本项目所有模块都会先 import core.config，
+# 且 sentence_transformers 是在 BGEEmbedder.__init__ 里**惰性** import 的
+# （见 core/embedder.py），所以在这里赋值一定早于 huggingface_hub 被加载。
+# 用"非空才写"而不是 setdefault：.env 里写成 `HF_ENDPOINT=`（空串）时，
+# setdefault 会因为"键已存在"而跳过，反而把空串留在环境里 → 下载地址变成空。
+HF_ENDPOINT = _get("HF_ENDPOINT", "https://hf-mirror.com")
+if not os.environ.get("HF_ENDPOINT"):
+    os.environ["HF_ENDPOINT"] = HF_ENDPOINT
+
 # ---------- Embedding ----------
 # bge-small-zh-v1.5：512 维，约 100MB，中文效果好且轻量
 #
@@ -96,6 +121,15 @@ EMBED_BATCH_SIZE = _getint("EMBED_BATCH_SIZE", 32)
 
 # bge 系列做检索时，查询侧建议加这句前缀（官方推荐，能小幅提升召回）
 QUERY_PREFIX = _get("QUERY_PREFIX", "为这个句子生成表示以用于检索相关文章：")
+
+# ---------- Reranker（阶段 4 扩展：混合检索融合后精排） ----------
+# 默认开。模式：auto = 优先 cross-encoder（BAAI/bge-reranker-v2-m3），
+# 加载不到（模型没下/没网）就自动退 bi（复用现有 bge embedding，零下载）。
+# cross 模式需要把模型下到本地；下载后可设 RERANKER_MODEL 指向本地目录，auto 会自动用上。
+RERANKER_ENABLED = _getbool("RERANKER_ENABLED", True)
+RERANKER_MODEL = _get("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
+RERANKER_MODE = _get("RERANKER_MODE", "auto")            # cross / bi / auto
+RERANKER_CANDIDATE_TOP_N = _getint("RERANKER_CANDIDATE_TOP_N", 20)
 
 # ---------- LLM（阶段 2：检索到上下文后，用它生成最终答案） ----------
 # 后端可切换：
@@ -141,6 +175,7 @@ def summary() -> str:
         f"PostgreSQL  : {PG_USER}:****@{PG_HOST}:{PG_PORT}/{PG_DB}\n"
         f"Milvus Lite : {MILVUS_PATH} (collection={COLLECTION_NAME})\n"
         f"Embedding   : {EMBED_MODEL} ({EMBED_DIM} 维)\n"
+        f"Reranker    : {'开' if RERANKER_ENABLED else '关'} (mode={RERANKER_MODE})\n"
         f"LLM         : {LLM_BACKEND} / {LLM_MODEL}"
     )
 

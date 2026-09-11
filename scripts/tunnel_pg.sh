@@ -1,17 +1,28 @@
 #!/usr/bin/env bash
 # ============================================================================
-# 建立 SSH 隧道：本地 5432 端口 → 云上 127.0.0.1:5432
+# ⚠️ 已非默认路径（仅云主机复用场景才需要）
 #
-# 为什么必须这样：
-#   云上 PostgreSQL 只监听 127.0.0.1，公网根本连不上（这是好事，安全）。
-#   SSH 隧道在云主机内部把请求转发给 localhost:5432，
-#   所以既不用改 PG 配置，也不用开阿里云安全组端口。
+# 本项目的默认开发方式是「本地 Docker 起 PostgreSQL」：
+#   docker run -d --name rag-pg -p 5432:5432 \
+#     -e POSTGRES_USER=rag -e POSTGRES_PASSWORD=rag_dev -e POSTGRES_DB=rag postgres:16
+# 然后 .env 里 PG_HOST=localhost 即可，根本不需要隧道。新人请直接用：
+#   bash scripts/setup_new_machine.sh
+#
+# 这个脚本只在「你确实有云主机、且想从本机直接连云上的 PG」时才用，
+# 例如临时查云上数据、和云上 1029 块做对比。
+#
+# —— 端口冲突说明（重要）——
+#   本地 Docker 的 rag-pg 已经占了 5432。本脚本检测到 5432 被占用会**直接退出并提示**，
+#   这是预期行为，不是 bug：请先 `docker stop rag-pg`（或换 RAG_LOCAL_PG_PORT=5433）再开隧道。
+#   注意：一旦隧道把本地 5432 指向云上，你的应用就会**悄悄读云上数据**，排查时务必分清连的是哪边。
+#
+# 原用途：建立 SSH 隧道，本地 5432 → 云上 127.0.0.1:5432
+#   云上 PostgreSQL 只监听 127.0.0.1，公网连不上（安全）。
+#   SSH 隧道在云主机内部把请求转发给 localhost:5432，不用改 PG 配置、不开安全组。
 #
 # 用法：
-#   bash scripts/tunnel_pg.sh
-#
-# 这个终端要一直开着，关掉隧道就断了。
-# 想停：Ctrl-C
+#   RAG_CLOUD_HOST=root@你的服务器IP bash scripts/tunnel_pg.sh
+# 保持终端开着，Ctrl-C 结束。
 # ============================================================================
 set -euo pipefail
 

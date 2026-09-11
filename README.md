@@ -247,7 +247,7 @@ bash scripts/setup_new_machine.sh
 | --- | --- | --- | --- |
 | **环境搭建** | `scripts/setup_new_machine.sh` | **新人/换机器**：全本地一键搭建（装依赖 + 下模型 + 起 PG + 写 .env） | `bash scripts/setup_new_machine.sh` |
 | **云上部署** | `scripts/setup_cloud.sh` | **云服务器**：复用已有部署，只补缺失依赖 + 校验配置/数据（+可选 Node 构建前端、systemd） | `bash scripts/setup_cloud.sh`　`FRONTEND=1`… `SYSTEMD=1`… |
-| 环境搭建 | `scripts/setup_local.sh` | 作者本人：本地开发复用自己云上 PG + 向量库 | `RAG_CLOUD_HOST=root@你的IP bash scripts/setup_local.sh` |
+| 环境搭建 | `scripts/setup_local.sh` | 作者本人：**云主机专用，已非默认**——本地开发复用自己云上 PG + 向量库 | `RAG_CLOUD_HOST=root@你的IP bash scripts/setup_local.sh` |
 | 命令行 | `scripts/ask.py` | 终端问答 / 调试 | `python scripts/ask.py "FastAPI 怎么做依赖注入？" [--retrieval hybrid] [--self-heal] [--agent-heal] [--reflect] [--trace]` |
 | 自愈 CLI | `scripts/heal_knowledge.py` | 阶段6 缺口自愈 / Demo | `python scripts/heal_knowledge.py "知识库没有的概念" [--site docs.python.org] [--file q.txt]` |
 | 体检 CLI | `scripts/health_check.py` | 阶段7 知识库体检 | `python scripts/health_check.py [--no-conflict] [--report out.md]` |
@@ -268,8 +268,10 @@ bash scripts/setup_new_machine.sh      # 全本地一键搭建（装依赖+下�
 .venv/bin/python scripts/api.py        # 起后端
 ```
 
-> 如果你（作者）的 PG 在云上，开发前先开隧道；该脚本**必须显式指定云主机**，故意不给默认值：
+> 默认开发方式就是本地 Docker PG（`.env` 里 `PG_HOST=localhost`），一条 `setup_new_machine.sh` 搞定，不需要隧道。
+> 只有「你确实有云主机、且想从本机直连云上 PG」时才开隧道（脚本必须显式指定云主机，故意不给默认值）：
 > ```bash
+> # ⚠️ 本地 Docker 的 rag-pg 已占 5432，开隧道前先 docker stop rag-pg（或换 RAG_LOCAL_PG_PORT=5433）
 > RAG_CLOUD_HOST=root@你的IP bash scripts/tunnel_pg.sh    # .env 里 PG_HOST=localhost
 > ```
 

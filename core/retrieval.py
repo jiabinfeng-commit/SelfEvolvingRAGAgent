@@ -55,7 +55,7 @@ def retrieve(question: str, emb, vec, pg, top_k: int = 5) -> List[Tuple[float, D
 
 def hybrid_retrieve(question: str, emb, vec, pg, bm25,
                     top_k: int = 5, vector_top_n: int = 20, bm25_top_n: int = 20,
-                    rrf_k: int = 60) -> List[Tuple[float, Dict[str, Any]]]:
+                    rrf_k: int = 60, reranker=None, rerank_top_n=None) -> List[Tuple[float, Dict[str, Any]]]:
     """
     阶段 4 混合检索：向量语义 + BM25 关键词，用 RRF 融合后取 top_k。
 
@@ -89,16 +89,21 @@ def hybrid_retrieve(question: str, emb, vec, pg, bm25,
     for rank, (cid, _score) in enumerate(bm_hits, 1):
         fused[cid] = fused.get(cid, 0.0) + 1.0 / (rrf_k + rank)
 
-    # 4) 按融合分降序取 top_k
-    ordered = sorted(fused.items(), key=lambda x: -x[1])[:top_k]
+    # 4) 按融合分降序排（先不切片，给重排留候选池）
+    ordered = sorted(fused.items(), key=lambda x: -x[1])
 
     # 5) 回表拿原文（和 retrieve() 一样，Milvus 只有 ID）
-    chunk_ids = [cid for cid, _ in ordered]
-    chunks = pg.get_chunks_by_ids(chunk_ids)
-    out = []
-    for cid, score in ordered:
-        c = chunks.get(cid)
-        if not c:
-            continue
-        out.append((score, c))
-    return out
+    #    开重排时多取一点候选（rerank_top_n）喂给重排器精排；
+    #    没开重排就只取 top_k，行为和以前完全一致。
+    if reranker is not None and getattr(reranker, "available", False):
+        cand_n = rerank_top_n or max(top_k, reranker.candidate_top_n)
+    else:
+        cand_n = top_k
+    cand_ids = [cid for cid, _ in ordered[:cand_n]]
+    chunks = pg.get_chunks_by_ids(cand_ids)
+    candidates = [(score, chunks[cid]) for cid, score in ordered[:cand_n] if cid in chunks]
+
+    # 6) 重排（只改顺序，保留原融合分）；不开重排就直接截断返回
+    if reranker is not None and getattr(reranker, "available", False):
+        return reranker.rerank(question, candidates, top_n=top_k)
+    return candidates[:top_k]

@@ -67,6 +67,7 @@ import re
 import json
 import hashlib
 import html
+import socket
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -110,6 +111,18 @@ MAX_CRAWL_CHARS = 6000
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
+# ---------- 联网可达性探测（阶段 6 联网调研的前置闸门） ----------
+# 背景（实测踩过的坑）：国内网络访问 duckduckgo / google 这类境外站点时，TCP 握手
+# 得不到任何响应 —— 连接停在 SYN_SENT，**既连不上也不被拒绝**。于是
+# urllib 的 timeout 只能靠等待耗完，一轮 10s、max_steps 轮就是几十秒白等，
+# 还会把整个 Web 服务的线程池拖住（前端表现为接口全部超时）。
+# 所以进"联网调研循环"之前先做一次**带超时的 TCP 探测**：
+#   不通 → 直接跳过调研、保持拒答，几秒内就返回明确原因。
+# 探测目标可在 .env 里用 NET_PROBE_HOST / NET_PROBE_PORT 覆盖（换了搜索后端就改它们）。
+NET_PROBE_HOST = os.getenv("NET_PROBE_HOST", "html.duckduckgo.com")
+NET_PROBE_PORT = int(os.getenv("NET_PROBE_PORT", "443"))
+NET_PROBE_TIMEOUT = float(os.getenv("NET_PROBE_TIMEOUT", "3"))
+
 
 # ================================================================
 # 联网调研三件套（纯标准库 urllib，不引 requests）
@@ -145,6 +158,32 @@ def _extract_ddg_url(href: str) -> Optional[str]:
     if m:
         return urllib.parse.unquote(m.group(1))
     return None
+
+
+def probe_net(host: str = None, port: int = None,
+              timeout: float = None) -> Tuple[bool, str]:
+    """
+    快速探测外网是否可达。返回 (是否可达, 说明文字)。
+
+    只做 **TCP 三次握手**，不发 HTTP 请求 —— 目的是判断"路通不通"，
+    不是判断"对方站点好不好"。这样：
+      · 更快：一次 connect 拿结果，不用等完整 HTTP 往返
+      · 更准：即便对方返回 403/503，也说明网络是通的（那是另一回事）
+      · 更省：不消耗对方配额，也不受对方限流影响
+
+    为什么需要它：见文件上方 NET_PROBE_* 的注释 —— 境外站点在国内会卡在
+    SYN_SENT，不探测的话只能在调研循环里按 timeout 硬等，白白拖垮请求。
+    """
+    h = host or NET_PROBE_HOST
+    p = port or NET_PROBE_PORT
+    t = timeout or NET_PROBE_TIMEOUT
+    try:
+        # create_connection 自带超时；连上后 with 退出即关闭，不留连接
+        with socket.create_connection((h, p), timeout=t):
+            return True, f"{h}:{p} 可达"
+    except Exception as e:
+        # 超时 / DNS 失败 / 连接被拒 都归为"不可达"，具体类型写进说明里便于排查
+        return False, f"{h}:{p} 不可达（{type(e).__name__}: {e}）"
 
 
 def web_search(query: str, top_n: int = 5, site: str = None,
@@ -484,7 +523,7 @@ def run_self_heal(question: str, *, top_k: int = None, retrieval: str = "vector"
                   pg: PGStore = None, vec: VecStore = None, emb=None,
                   backend_llm=None, bm25=None, max_steps: int = 3,
                   site: str = None, save: bool = True,
-                  search_fn=None, fetch_fn=None) -> Dict[str, Any]:
+                  search_fn=None, fetch_fn=None, reranker=None) -> Dict[str, Any]:
     """
     阶段 6 总入口：对一个问题跑完整"自愈闭环"。
 
@@ -538,6 +577,7 @@ def run_self_heal(question: str, *, top_k: int = None, retrieval: str = "vector"
         first = generate_answer(
             question, top_k=top_k, retrieval=retrieval, self_heal=True,
             save=save, emb=emb, vec=vec, pg=pg, backend_llm=backend_llm, bm25=bm25,
+            reranker=reranker,
         )
         top_score = first["retrieved"][0]["score"] if first["retrieved"] else None
         steps.append(f"库内首答: refusal={first['refusal']}, top_score={top_score}")
@@ -560,7 +600,14 @@ def run_self_heal(question: str, *, top_k: int = None, retrieval: str = "vector"
         score = 0.0
         detail: dict = {}
 
-        for step in range(max_steps):
+        # 进循环前先探一次网络（见 probe_net 的说明）。不通就一轮都不跑：
+        # 境外站点在受限网络下会卡在 SYN_SENT，硬等 max_steps × timeout 会让
+        # 请求拖到超时、还会占着服务线程。这里几秒内失败并给出明确原因，
+        # 之后 draft 仍为空串、passed 仍为 False，自然走到下面的"保持拒答"兜底。
+        reachable, probe_msg = probe_net()
+        steps.append(f"联网探测: {probe_msg}")
+
+        for step in range(max_steps if reachable else 0):
             q = _research_query(question, step)
             hits, err = search_fn(q, top_n=5, site=site)
             if err:
@@ -602,6 +649,7 @@ def run_self_heal(question: str, *, top_k: int = None, retrieval: str = "vector"
             final = generate_answer(
                 question, top_k=top_k, retrieval=retrieval, self_heal=False,
                 save=save, emb=emb, vec=vec, pg=pg, backend_llm=backend_llm, bm25=None,
+                reranker=reranker,
             )
             final["gap_detected"] = True
             final["gap_reason"] = reason

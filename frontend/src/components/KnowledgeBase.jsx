@@ -116,14 +116,19 @@ export default function KnowledgeBase() {
   const refresh = useCallback(async () => {
     setLoadingDocs(true);
     try {
-      const [s, d] = await Promise.all([api.get("/stats"), api.get("/documents")]);
+      // 首屏数据一次拿全：/api/bootstrap 把 stats + documents 合并成一个请求。
+      // 原来这里是 Promise.all([/stats, /documents])，再加上 Layout 的 /health，
+      // 冷启动会并发 3~4 个请求同时冲 ensure_engine()（引擎没建好时反复重建，
+      // Milvus Lite 重复构造会抛 DataDirLockedError）。合并后只剩 2 个请求。
+      const r = await api.get("/bootstrap");
+      const s = r.data.stats || {};
       setStats({
-        documents: s.data.documents,
-        chunks: s.data.chunks,
-        vectors: s.data.vectors,
-        staging_docs: s.data.staging_docs || 0,
+        documents: s.documents,
+        chunks: s.chunks,
+        vectors: s.vectors,
+        staging_docs: s.staging_docs || 0,
       });
-      setDocs(d.data.documents || []);
+      setDocs(r.data.documents || []);
     } catch (e) {
       // 拦截器已处理
     } finally {

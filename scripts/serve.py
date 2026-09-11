@@ -40,6 +40,7 @@ import os
 import sys
 import argparse
 import contextlib
+import threading
 from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -66,6 +67,11 @@ STATE: dict = {
     "bm25": None,      # BM25 索引（首次 hybrid 时建）
 }
 
+# 引擎构建锁：见下面 ensure_engine 的说明。
+# 不加锁时，两个并发首请求会各建一份 VecStore，而 Milvus Lite 单进程独占同一路径，
+# 第二次构造直接抛 DataDirLockedError（同一个进程内也会冲突）。
+ENGINE_LOCK = threading.Lock()
+
 
 def ensure_engine():
     """
@@ -74,24 +80,37 @@ def ensure_engine():
     为什么惰性而不是在启动时全建？启动时若 PG 临时不可达，服务会直接起不来；
     惰性建则"存储挂了也能先起服务"，/health 返回 degraded，/ask 在真正需要时再报错，
     对本地开发更友好。生产若要严格启动即校验，可在 lifespan 里直接调用本函数。
+
+    【并发安全】本文件的路由是同步 `def`，FastAPI 会丢到线程池执行，
+    多个请求可能真的同时进入本函数 → 必须用双检锁挡住 check-then-act 竞态，
+    否则会出现"两个线程都判定 STATE['vec'] is None，各建一份 VecStore"
+    → Milvus Lite 抛 DataDirLockedError（flock 按打开文件描述计，同进程也冲突）。
+    详见 scripts/api.py 里 ensure_engine 的完整注释。
     """
-    if STATE["emb"] is None:
-        STATE["emb"] = get_embedder("bge")
-    if STATE["pg"] is None:
-        STATE["pg"] = PGStore()
-    if STATE["vec"] is None:
-        STATE["vec"] = VecStore(dim=STATE["emb"].dim)
-    if STATE["llm"] is None:
-        STATE["llm"] = llm_mod.get_llm(config.LLM_BACKEND)
-    if STATE["bm25"] is None:
-        # BM25 依赖 PG 全量 chunk，建一次缓存；建失败不影响纯向量检索
-        try:
-            all_chunks = STATE["pg"].get_all_chunks()
-            STATE["bm25"] = BM25().build(
-                [(c["chunk_id"], (c.get("content") or "")) for c in all_chunks]
-            )
-        except Exception:
-            STATE["bm25"] = None
+    # 快路径：五个槽位都有值 → 直接返回，不进锁（稳态几乎零开销）。
+    # bm25 建失败会被置 None，那种情况落进锁里重试，语义与加锁前一致。
+    if all(STATE[k] is not None for k in ("emb", "pg", "vec", "llm", "bm25")):
+        return
+
+    with ENGINE_LOCK:
+        # 慢路径：拿到锁后再判断一次（可能已被先到的线程建好了）
+        if STATE["emb"] is None:
+            STATE["emb"] = get_embedder("bge")
+        if STATE["pg"] is None:
+            STATE["pg"] = PGStore()
+        if STATE["vec"] is None:
+            STATE["vec"] = VecStore(dim=STATE["emb"].dim)
+        if STATE["llm"] is None:
+            STATE["llm"] = llm_mod.get_llm(config.LLM_BACKEND)
+        if STATE["bm25"] is None:
+            # BM25 依赖 PG 全量 chunk，建一次缓存；建失败不影响纯向量检索
+            try:
+                all_chunks = STATE["pg"].get_all_chunks()
+                STATE["bm25"] = BM25().build(
+                    [(c["chunk_id"], (c.get("content") or "")) for c in all_chunks]
+                )
+            except Exception:
+                STATE["bm25"] = None
 
 
 @asynccontextmanager

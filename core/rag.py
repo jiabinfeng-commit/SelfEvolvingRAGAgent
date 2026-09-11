@@ -52,7 +52,7 @@ def generate_answer(question: str,
                     reflect: bool = False,
                     trace: bool = False,
                     request_id: str = None,
-                    trace_recorder=None) -> Dict[str, Any]:
+                    trace_recorder=None, reranker=None) -> Dict[str, Any]:
     """
     端到端回答一个问题，返回结构化结果。
 
@@ -109,7 +109,7 @@ def generate_answer(question: str,
                 bm25 = BM25().build(
                     [(c["chunk_id"], (c.get("content") or "")) for c in all_chunks]
                 )
-            retrieved = hybrid_retrieve(question, emb, vec, pg, bm25, top_k=top_k)
+            retrieved = hybrid_retrieve(question, emb, vec, pg, bm25, top_k=top_k, reranker=reranker)
         else:
             retrieved = retrieve(question, emb, vec, pg, top_k)
 
@@ -154,7 +154,7 @@ def generate_answer(question: str,
             heal_k = max(int(top_k * SELF_HEAL_TOPK_MULT), top_k)  # 扩大召回给更多素材
             try:
                 retrieved_h = (
-                    hybrid_retrieve(question, emb, vec, pg, bm25, top_k=heal_k)
+                    hybrid_retrieve(question, emb, vec, pg, bm25, top_k=heal_k, reranker=reranker)
                     if retrieval == "hybrid"
                     else retrieve(question, emb, vec, pg, heal_k)
                 )

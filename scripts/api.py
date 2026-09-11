@@ -80,6 +80,7 @@ from core.storage.pg_store import PGStore
 from core.storage.vec_store import VecStore
 from core import llm as llm_mod
 from core.bm25 import BM25
+from core.reranker import Reranker
 from core.rag import generate_answer
 from core.agent import run_self_heal
 from core.ingest import ingest_file
@@ -96,32 +97,81 @@ STATE: dict = {
     "vec": None,
     "llm": None,
     "bm25": None,
+    "reranker": None,
 }
+
+# BM25 增量更新（上传加块 / 删除去块）与查询搜索共享同一份索引，
+# 用这把锁避免后台入库线程改索引时，查询线程正好在读导致状态错乱。
+BM25_LOCK = threading.Lock()
+
+# 引擎构建锁（和自己这行上面的 BM25_LOCK 是两把不同的锁，不要合并）：
+# BM25_LOCK 保护的是"改已有索引"，本锁保护的是"建引擎单例"。详见 ensure_engine 的注释。
+ENGINE_LOCK = threading.Lock()
 
 
 def ensure_engine():
-    """首请求时建引擎依赖；已建复用。和 serve.py 的 ensure_engine 同款。"""
-    if STATE["emb"] is None:
-        STATE["emb"] = get_embedder("bge")
-    if STATE["pg"] is None:
-        STATE["pg"] = PGStore()
-        STATE["pg"].init_schema()
-    if STATE["vec"] is None:
-        STATE["vec"] = VecStore(dim=STATE["emb"].dim)
-        # 不强制 init_collection：空集合也能 upsert（VecStore.init_collection 是幂等的）
-        with contextlib.suppress(Exception):
-            STATE["vec"].init_collection()
-    if STATE["llm"] is None:
-        STATE["llm"] = llm_mod.get_llm(config.LLM_BACKEND)
-    if STATE["bm25"] is None:
-        # BM25 依赖 PG 全量 chunk；建失败不影响纯向量检索
-        try:
-            all_chunks = STATE["pg"].get_all_chunks()
-            STATE["bm25"] = BM25().build(
-                [(c["chunk_id"], (c.get("content") or "")) for c in all_chunks]
-            )
-        except Exception:
-            STATE["bm25"] = None
+    """
+    首请求时建引擎依赖；已建复用。和 serve.py 的 ensure_engine 同款。
+
+    【为什么必须加锁】—— 这里踩过一个真实的坑：
+      本文件的路由全是**同步函数**（`def` 而不是 `async def`），FastAPI 会把它们
+      丢到线程池里执行，也就是**多个请求会真的并行进入本函数**。于是出现经典的
+      check-then-act 竞态：
+
+          线程A：看到 STATE["vec"] is None  → 开始构造 VecStore
+          线程B：也看到 STATE["vec"] is None → 也去构造 VecStore
+                 （此刻 A 还没把结果赋回 STATE，所以 B 读到的仍然是 None）
+
+      Milvus Lite 是**单进程独占**的嵌入式库：同一路径被打开两次，第二次会抛
+          milvus_lite.exceptions.DataDirLockedError:
+              another process holds the lock on '.../milvus.db'
+      注意 flock 是按「打开的文件描述」计的，所以**同一个进程**内开两次一样冲突
+      —— 报错文案说 "another process"，其实同进程也会中招，很有迷惑性。
+
+      典型现场：前端首屏并发打 /api/health 和 /api/documents，
+      一个 200 OK、另一个 503 Service Unavailable（见 logs 里两条紧挨的 INFO）。
+
+    【修法】双检锁（double-checked locking）：
+      1) 锁外快路径：依赖都建好了就直接返回 —— 稳态下几乎零开销，不用每次抢锁
+      2) 抢锁 → 锁内**再检查一次**（可能已被先到的线程建好了，命中就跳过）
+    """
+    # 快路径：六个槽位都已有值 → 直接返回，不进锁。
+    # bm25 / reranker 建失败时会被置为 None（降级），那种情况会落到锁里重试，
+    # 保持和加锁前完全一致的语义。
+    if all(STATE[k] is not None for k in
+           ("emb", "pg", "vec", "llm", "bm25", "reranker")):
+        return
+
+    with ENGINE_LOCK:
+        # 慢路径：拿到锁后再判断一次 —— 这段时间里其他线程可能已经建好了
+        if STATE["emb"] is None:
+            STATE["emb"] = get_embedder("bge")
+        if STATE["pg"] is None:
+            STATE["pg"] = PGStore()
+            STATE["pg"].init_schema()
+        if STATE["vec"] is None:
+            STATE["vec"] = VecStore(dim=STATE["emb"].dim)
+            # 不强制 init_collection：空集合也能 upsert（VecStore.init_collection 是幂等的）
+            with contextlib.suppress(Exception):
+                STATE["vec"].init_collection()
+        if STATE["llm"] is None:
+            STATE["llm"] = llm_mod.get_llm(config.LLM_BACKEND)
+        if STATE["bm25"] is None:
+            # BM25 依赖 PG 全量 chunk；建失败不影响纯向量检索
+            try:
+                all_chunks = STATE["pg"].get_all_chunks()
+                STATE["bm25"] = BM25().build(
+                    [(c["chunk_id"], (c.get("content") or "")) for c in all_chunks]
+                )
+            except Exception:
+                STATE["bm25"] = None
+        if STATE["reranker"] is None:
+            # 重排器：默认 auto（优先 cross-encoder，加载不到自动退 bi 复用 bge）。
+            # 建失败/不可用也不影响主流程，hybrid_retrieve 会原样返回。
+            try:
+                STATE["reranker"] = Reranker(embedder=STATE["emb"])
+            except Exception:
+                STATE["reranker"] = None
 
 
 # ================================================================
@@ -262,8 +312,17 @@ def _run_ingest_job(job_id: str, file_infos: List, strategy: str, tmpdir: str):
                     JOBS[job_id]["done_files"] = idx + 1
                     JOBS[job_id]["progress"] = round((idx + 1) / total * 100.0, 1)
 
-        # 新文档入库后 BM25 索引过期，标记失效（下次 hybrid 请求重建）
-        STATE["bm25"] = None
+        # 新文档入库后：不再把整库 BM25 置空（那会让下一次查询全库重建）。
+        # 改为增量把本次成功入库文档的 chunk 加进现有索引 —— 块越多越省。
+        with BM25_LOCK:
+            bm = STATE["bm25"]
+            if bm is not None:
+                for r in JOBS[job_id].get("results", []):
+                    if r.get("ok") and r.get("doc_id"):
+                        rows, _ = STATE["pg"].get_chunks_by_doc(r["doc_id"], limit=100000)
+                        bm.add_chunks(
+                            [(row["chunk_id"], row.get("content") or "") for row in rows]
+                        )
         _update_job(job_id, status="done", progress=100.0,
                     current_stage="完成", current_file="", finished_at=time.time())
     except Exception as e:
@@ -405,6 +464,75 @@ def llm_info():
         "model": config.LLM_MODEL,
         "embed_model": config.EMBED_MODEL,
     }
+
+
+@app.get("/api/bootstrap")
+def bootstrap():
+    """
+    首屏一次性拿全初始数据（= /llm-info + /health + /stats + /documents 的合并）。
+
+    【为什么需要它】
+      前端首屏原本会**并发**打 4 个接口：
+          Layout        → /api/llm-info + /api/health
+          KnowledgeBase → /api/stats    + /api/documents
+      冷启动时这 4 个请求会同时冲进 ensure_engine()，在"引擎还没建好"的窗口里
+      反复触发重复构建。Milvus Lite 是单进程独占的嵌入式库，重复构造同一路径
+      会直接抛 DataDirLockedError → 503（线上就是这么炸的：/api/health 200 OK、
+      /api/documents 503 紧挨着出现）。
+      ensure_engine 现在已有双检锁兜底，但"少打几个请求"本身也能让首屏更快、
+      冷启动更稳 —— 合并成 1 个请求后，前端只需一次往返就能渲染首屏。
+
+    【容错】
+      引擎建不起来（PG 挂了等）也返回 200 + status=degraded，
+      让前端能正常渲染"空态 + 降级提示"，而不是弹一个 503 错误页。
+    """
+    payload = {
+        "llm": {
+            "backend": config.LLM_BACKEND,
+            "model": config.LLM_MODEL,
+            "embed_model": config.EMBED_MODEL,
+        },
+        "health": {"status": "ok", "pg": None, "milvus": None},
+        "stats": {"documents": 0, "chunks": 0, "vectors": None, "staging_docs": 0},
+        "documents": [],
+        "error": None,
+    }
+
+    try:
+        ensure_engine()
+    except Exception as e:
+        payload["health"]["status"] = "degraded"
+        payload["error"] = f"{type(e).__name__}: {e}"
+        return payload
+
+    try:
+        cnt = STATE["pg"].count()
+        docs = STATE["pg"].list_documents()
+        # 时间字段转字符串，口径与 /api/documents 保持一致，前端可直接渲染
+        for d in docs:
+            if d.get("created_at"):
+                d["created_at"] = str(d["created_at"])
+        staging = [d for d in docs if d.get("status") == "staging"]
+
+        milvus_count = None
+        with contextlib.suppress(Exception):
+            if STATE["vec"] is not None:
+                milvus_count = STATE["vec"].count()
+
+        payload["health"] = {"status": "ok", "pg": cnt, "milvus": milvus_count}
+        payload["stats"] = {
+            "documents": cnt["documents"],
+            "chunks": cnt["chunks"],
+            "vectors": milvus_count,
+            "staging_docs": len(staging),
+        }
+        payload["documents"] = docs
+    except Exception as e:
+        # 引擎建起来了但查询失败（PG 中途断连等）：仍然 200，标记 degraded
+        payload["health"]["status"] = "degraded"
+        payload["error"] = f"{type(e).__name__}: {e}"
+
+    return payload
 
 
 # ================================================================
@@ -604,8 +732,11 @@ def delete_document(doc_id: str):
         if d is None:
             raise HTTPException(404, f"文档不存在：{doc_id}")
 
+        # 0) 先记下该文档的 chunk_id（必须在删 PG 之前取，删完就查不到了）
+        _rows, _ = STATE["pg"].get_chunks_by_doc(doc_id, limit=100000)
+        _chunk_ids = [row["chunk_id"] for row in _rows]
+
         # 1) 先删向量（不删的话，孤儿向量永远搜不到但占内存）
-        vec_warn = None
         with contextlib.suppress(Exception):
             if STATE["vec"] is not None:
                 STATE["vec"].delete_by_doc(doc_id)
@@ -613,8 +744,11 @@ def delete_document(doc_id: str):
         # 2) 删 PG（级联删 chunks）
         n = STATE["pg"].delete_document(doc_id)
 
-        # 3) BM25 索引失效标记
-        STATE["bm25"] = None
+        # 3) BM25 增量移除该文档的所有 chunk（不再整库置空重建）
+        with BM25_LOCK:
+            bm = STATE["bm25"]
+            if bm is not None:
+                bm.remove_chunks(_chunk_ids)
 
         return {"doc_id": doc_id, "deleted_chunks": n, "ok": True}
     except HTTPException:
@@ -644,6 +778,7 @@ def ask(req: AskRequest):
                 retrieval=req.retrieval,
                 pg=STATE["pg"], emb=STATE["emb"], vec=STATE["vec"],
                 backend_llm=STATE["llm"], bm25=STATE["bm25"], save=req.save,
+                reranker=STATE["reranker"],
             )
         return generate_answer(
             req.question,
@@ -655,6 +790,7 @@ def ask(req: AskRequest):
             trace=req.trace,
             emb=STATE["emb"], vec=STATE["vec"], pg=STATE["pg"],
             backend_llm=STATE["llm"], bm25=STATE["bm25"],
+            reranker=STATE["reranker"],
         )
     except HTTPException:
         raise
@@ -682,7 +818,7 @@ def retrieve_only(req: RetrieveRequest):
             if STATE["bm25"] is not None:
                 hits = hybrid_retrieve(
                     req.question, STATE["emb"], STATE["vec"], STATE["pg"], STATE["bm25"],
-                    top_k=req.top_k,
+                    top_k=req.top_k, reranker=STATE["reranker"],
                 )
             else:
                 hits = retrieve(req.question, STATE["emb"], STATE["vec"], STATE["pg"], top_k=req.top_k)

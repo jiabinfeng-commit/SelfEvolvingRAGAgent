@@ -29,12 +29,13 @@ const MENU_ITEMS = [
 export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [llm, setLlm] = useState(null);   // { backend, model, embed_model }
-  const [health, setHealth] = useState(null); // /api/health 的 status
+  const [health, setHealth] = useState(null); // /api/health 的完整响应
 
-  // 顶栏状态：拉一次 /api/llm-info + /api/health 展示后端连通性
+  // 顶栏状态：只拉一次 /api/health。
+  // 它的 config 字段里已经带了 llm_backend / llm_model / embed_model，
+  // 够顶栏展示，不必再单独打 /api/llm-info。
+  // 冷启动时并发请求越少，首屏越稳（引擎只需被构建一次）。
   useEffect(() => {
-    api.get("/llm-info").then((r) => setLlm(r.data)).catch(() => setLlm({ backend: "?", model: "?" }));
     api.get("/health")
       .then((r) => setHealth(r.data))
       .catch(() => setHealth({ status: "down" }));
@@ -47,12 +48,14 @@ export default function Layout() {
           <span className="logo-mark"><ThunderboltOutlined /></span>
           Self-Evolving RAG Agent
           <span style={{ marginLeft: "auto", marginRight: 20, fontSize: 12, fontWeight: 400, opacity: 0.85 }}>
-            {llm ? (
+            {health ? (
               <Space size={6}>
-                <Tag color={health?.status === "ok" ? "success" : "warning"} style={{ margin: 0 }}>
-                  {health?.status === "ok" ? "● 在线" : "● 降级"}
+                <Tag color={health.status === "ok" ? "success" : "warning"} style={{ margin: 0 }}>
+                  {health.status === "ok" ? "● 在线" : "● 降级"}
                 </Tag>
-                <span>{llm.backend} / {llm.model}</span>
+                <span>
+                  {health.config?.llm_backend || "?"} / {health.config?.llm_model || "?"}
+                </span>
               </Space>
             ) : (
               <Spin size="small" />
