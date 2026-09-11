@@ -25,6 +25,7 @@ ask.py（命令行）、serve.py（HTTP 服务）、ui.py（streamlit 页面）�
 - dry_run：只做召回 + 拼 prompt，不调 LLM、不落库（ask.py 的 --dry-run 用）。
 """
 import time
+import uuid
 from typing import List, Dict, Any, Optional
 
 from core import config
@@ -36,6 +37,8 @@ from core.prompt import build_prompt, SYSTEM_PROMPT, RELAXED_SYSTEM_PROMPT
 from core.retrieval import retrieve, hybrid_retrieve
 from core.self_heal import is_refusal, should_heal, SELF_HEAL_TOPK_MULT
 from core.bm25 import BM25
+from core.reflexion import run_reflexion
+from core.tracing import TraceRecorder
 
 
 def generate_answer(question: str,
@@ -45,7 +48,11 @@ def generate_answer(question: str,
                     save: bool = True,
                     dry_run: bool = False,
                     emb=None, vec=None, pg=None,
-                    backend_llm=None, bm25=None) -> Dict[str, Any]:
+                    backend_llm=None, bm25=None,
+                    reflect: bool = False,
+                    trace: bool = False,
+                    request_id: str = None,
+                    trace_recorder=None) -> Dict[str, Any]:
     """
     端到端回答一个问题，返回结构化结果。
 
@@ -55,6 +62,12 @@ def generate_answer(question: str,
     :param self_heal:   是否启用阶段 5 的 Agent 自愈（拒答且召回分够高时换策略重试）
     :param save:        是否把这次问答写入 PG 的 qa_log（闭环落库）
     :param dry_run:     只召回 + 拼 prompt，不调 LLM、不落库（开发调试用）
+    :param reflect:     阶段 8：生成答案后做事实核查（Reflexion）。发现无依据断言会
+                        重检索/重写，仍不通过则降级为安全拒答。默认关。
+    :param trace:       阶段 8：把本次问答链路（召回/分数/prompt/耗时/估算token/反射结果）
+                        写入 PG 的 trace_log，供可观测看板。默认关。
+    :param request_id:  链路追踪用的请求 id（一次会话一个 uuid）；trace=True 且不传则自动生成。
+    :param trace_recorder: 可注入已建好的 TraceRecorder（常驻场景复用）；不传则现场建。
     :param emb/vec/pg/backend_llm/bm25: 可注入已建好的实例（服务/页面常驻复用场景）。
                          任一为 None 时，本函数按需要惰性创建；其中 pg 由本函数创建时会
                          在函数结束时自动关闭，注入的 pg 由调用方负责生命周期。
@@ -115,6 +128,7 @@ def generate_answer(question: str,
                 "retrieved": [
                     {
                         "chunk_id": c.get("chunk_id"),
+                        "doc_id": c.get("doc_id"),
                         "score": float(s),
                         "doc_name": c.get("doc_name"),
                         "heading": c.get("heading"),
@@ -157,6 +171,19 @@ def generate_answer(question: str,
                 # 自愈过程中 LLM/召回异常：保持首轮原答案，不自欺欺人
                 pass
 
+        # —— 第四步半：阶段 8（可选）Reflexion 事实核查 ——
+        # 放在 self_heal 之后：先尽力答出/救回，再对"最终答案"做一次抗幻觉核查。
+        reflected = False
+        reflect_pass = None
+        reflect_detail: Dict[str, Any] = {}
+        if reflect:
+            final_a, reflected, reflect_pass, reflect_detail = run_reflexion(
+                question, answer, retrieved, emb, vec, pg, backend_llm,
+                bm25=bm25, top_k=top_k, retrieval=retrieval,
+            )
+            answer = final_a   # 可能已被重写，或降级为安全拒答
+            # 若降级成了拒答，refusal 标志同步更新（下面组装时会用 is_refusal 再判一次）
+
         # —— 第五步：落库（阶段 2 闭环的"答案落库"）——
         if save:
             ctx_ids = [c.get("chunk_id") for _, c in retrieved]
@@ -171,13 +198,36 @@ def generate_answer(question: str,
                 latency_s=latency,
             )
 
-        # —— 第六步：组装返回 ——
+        # —— 第六步：阶段 8（可选）链路追踪落库 ——
+        # 旁路：写失败不影响主回答。trace_recorder 可注入（常驻复用），否则现场建一个。
+        if trace:
+            try:
+                recorder = trace_recorder or TraceRecorder(pg)
+                rid = recorder.record(
+                    question=question,
+                    retrieval=retrieval,
+                    backend=config.LLM_BACKEND,
+                    recalled_ids=[c.get("chunk_id") for _, c in retrieved],
+                    recalled_scores=[float(s) for s, _ in retrieved],
+                    prompt=user_prompt,
+                    answer=answer,
+                    latency_s=latency,
+                    reflected=reflected,
+                    reflect_pass=reflect_pass,
+                    request_id=request_id,
+                )
+                request_id = rid
+            except Exception:
+                pass   # 追踪是旁路，任何异常都不该影响返回
+
+        # —— 第七步：组装返回 ——
         return {
             "question": question,
             "answer": answer,
             "retrieved": [
                 {
                     "chunk_id": c.get("chunk_id"),
+                    "doc_id": c.get("doc_id"),
                     "score": float(s),
                     "doc_name": c.get("doc_name"),
                     "heading": c.get("heading"),
@@ -186,8 +236,13 @@ def generate_answer(question: str,
                 for s, c in retrieved
             ],
             "latency_s": round(latency, 2),
-            "refusal": is_refusal(answer),     # 用最终答案判定（自愈成功则 False）
+            "refusal": is_refusal(answer),     # 用最终答案判定（自愈/降级成功则 False）
             "self_healed": self_healed,
+            # 阶段 8 新增字段
+            "reflected": reflected,
+            "reflect_pass": reflect_pass,
+            "reflect_detail": reflect_detail,
+            "request_id": request_id,
         }
     finally:
         # 只有本函数自己创建的 pg 才负责关闭；注入的由调用方管理

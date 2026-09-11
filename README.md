@@ -193,15 +193,23 @@ git tag v0.0-corpus
 
 ---
 
-## 七、运行入口（阶段 1~5 全链路）
+## 七、运行入口（阶段 1~10 全链路）
 
-语料与评测集只是地基。真正能跑的 RAG Agent 在 `core/` + `scripts/` 里，三个入口共用同一份问答逻辑（`core/rag.generate_answer`）：
+语料与评测集只是地基。真正能跑的 RAG Agent 在 `core/` + `scripts/` + `frontend/` 里：
 
 | 入口 | 文件 | 用途 | 启动命令 |
 | --- | --- | --- | --- |
-| 命令行 | `scripts/ask.py` | 终端问答 / 调试 | `python scripts/ask.py "FastAPI 怎么做依赖注入？" [--retrieval hybrid] [--self-heal]` |
+| 命令行 | `scripts/ask.py` | 终端问答 / 调试 | `python scripts/ask.py "FastAPI 怎么做依赖注入？" [--retrieval hybrid] [--self-heal] [--agent-heal] [--reflect] [--trace]` |
+| 自愈 CLI | `scripts/heal_knowledge.py` | 阶段6 缺口自愈 / Demo | `python scripts/heal_knowledge.py "知识库没有的概念" [--site docs.python.org] [--file q.txt]` |
+| 体检 CLI | `scripts/health_check.py` | 阶段7 知识库体检 | `python scripts/health_check.py [--no-conflict] [--report out.md]` |
 | HTTP 服务 | `scripts/serve.py` | 阶段4 服务化（FastAPI） | `python scripts/serve.py` → http://127.0.0.1:8000/docs |
-| 页面 | `scripts/ui.py` | 阶段5 可视化（Streamlit） | `streamlit run scripts/ui.py` → http://localhost:8501 |
+| 页面 | `scripts/ui.py` | 阶段 5/6/7/8 可视化（Streamlit：问答 / 体检 / 链路追踪 三标签页） | `streamlit run scripts/ui.py` → http://localhost:8501 |
+| **前端 API** | `scripts/api.py` | **阶段 10** 前端要打的全 API（KB 管理 + 问答 + 检索测试 + 体检 + 追踪 + **入库任务轮询**，共 14 个） | `python scripts/api.py` → http://127.0.0.1:8000/docs |
+| **前端页面** | `frontend/` | **阶段 10** 仿 RAGFlow 风格（React + Vite + AntD：知识库 / 问答 / 检索测试 / 体检 / 链路追踪 五页，知识库页含**解析异步进度条**） | `cd frontend && npm install && npm run dev` → http://127.0.0.1:5173 |
+
+> - `--agent-heal` 与 `heal_knowledge.py`：阶段 6 闭环（缺口→联网调研→生成→门禁→写影子库 staging→再问能答）。
+> - `--reflect`（阶段 8）：生成答案后做一次事实核查，发现无依据的断言就重检索/重写，仍不通过则降级为安全拒答。
+> - `--trace`（阶段 8）：把本次问答的召回/分数/prompt/耗时/估算 token/反射结果写入 `trace_log` 表，供可观测看板。
 
 前置（PG 走 SSH 隧道连云上）：
 ```bash
@@ -216,7 +224,100 @@ bash scripts/tunnel_pg.sh          # 开隧道（.env 里 PG_HOST=localhost）
 - `docs/05-阶段5-Agent自愈.md`（逻辑层：拒答检测 + 重试）
 - `docs/06-阶段4-服务化.md`（服务层：FastAPI）
 - `docs/07-阶段5-streamlit页面.md`（UI 层：Streamlit）
+- `docs/08-阶段6-Agent自愈闭环.md`（阶段6：缺口自愈 + 影子库防投毒）
+- `docs/09-阶段7-知识库体检.md`（阶段7：过时/矛盾/僵尸/重复 四检测器 + 健康报告）
+- `docs/10-阶段8-Reflexion与可观测.md`（阶段8：反射自检闭环 + trace_log 链路追踪）
+- `docs/11-阶段9-包装发布.md`（阶段9：架构图 / 效果对比表 / 已知限制 / 简历 bullets）
+- `docs/12-前端-React知识库页面.md`（阶段10：仿 RAGFlow 风格的前端 + 知识库管理 API）
+- `docs/13-项目完整介绍与操作手册.md`（★ **推荐先读这份**：技术栈 / 目录结构 / 从入口开始的完整使用流程 / 5 个页面操作详解 / 14 个 API / 存储模型 / 排障 FAQ）
 
 ---
 
-*生成时间：2026-09-09（地基）｜ 运行入口更新：2026-09-11（阶段1~5）| 语料来源：github.com/fastapi/fastapi @master (docs/zh/docs)*
+## 八、系统架构（阶段 1~10 全景）
+
+```mermaid
+flowchart TD
+    U[用户问题] --> R[检索: retrieve / hybrid_retrieve]
+    VEC[(Milvus Lite\n向量)] -->|向量| R
+    PG[(PostgreSQL\nchunk / document\nqa_log / eval / trace)] -->|原文回表| R
+    R --> G[generate_answer\n拼 RAG prompt + LLM 生成]
+
+    G --> S5{阶段5\n模型拒答?}
+    S5 -- 是 且 召回够高 --> S5b[换宽松指令 + 扩大召回重试]
+    S5b --> G
+
+    G --> S6{阶段6\n知识缺口?}
+    S6 -- 有缺口 --> S6b[联网调研 → 生成 → 质量门禁\n→ 写影子库 staging → 再答]
+    S6b --> G
+
+    G --> RF{阶段8 Reflexion\n事实核查}
+    RF -- 无依据 --> RFb[重检索 / 重写 / 降级拒答]
+    RFb --> G
+
+    G --> A[答案 + 落 qa_log]
+    A --> T[(trace_log\n可观测: 召回/分数/prompt/耗时/token/反射)]
+    A --> HC[阶段7 体检\n过时 / 矛盾 / 僵尸 / 重复]
+
+    PG -. 体检只读 .-> HC
+    S6b -. staging 待审 .-> PG
+```
+
+**分层（和代码目录一一对应）**
+
+| 层 | 模块 | 职责 |
+|---|---|---|
+| 数据层 | `core/chunker.py` `core/embedder.py` `core/storage/*` | 切片、bge 编码、双存储（PG 原文 + Milvus 向量） |
+| 检索层 | `core/retrieval.py` `core/bm25.py` | 向量检索、BM25 混合检索（RRF 融合） |
+| 生成层 | `core/rag.py` `core/prompt.py` `core/llm.py` | 拼 prompt、调 LLM、答案落库（单一事实来源） |
+| 自愈层 | `core/self_heal.py`(阶段5) `core/agent.py`(阶段6) | 拒答自救、缺口联网补库 + 影子库防投毒 |
+| 质检层 | `core/reflexion.py`(阶段8) `core/health_check.py`(阶段7) | 事实核查闭环、知识库体检 |
+| 可观测 | `core/tracing.py` + `trace_log` | 链路追踪落库 |
+| 评估 | `core/evaluator.py` | LLM-as-judge 打分，指标落 `eval_run` |
+| 入口 | `scripts/ask.py` `serve.py` `ui.py` `api.py` `heal_knowledge.py` `health_check.py` + `frontend/` | CLI / HTTP / Streamlit / 前端 API / 自愈 Demo / 体检 / React 前端 |
+
+## 九、效果对比表（指标口径与预期方向）
+
+> 真实数值由 `python scripts/evaluate.py` 实跑获得，结果自动落 `eval_run` 表；
+> 下表给出**指标口径与各阶段带来的预期方向**，标 `示例` 的格子需你实跑后替换。
+
+| 配置（A/B 对照） | accuracy | recall_top1 | refusal_rate（拒答正确率） | 说明 |
+| --- | --- | --- | --- | --- |
+| 纯向量 baseline（阶段 1~2） | 基线 | 基线 | 基线 | 见 `eval_run` 最早一条 |
+| + 混合检索（阶段 4） | ↑ | ↑ | ≈ | 同义改写/精确词召回改善（RRF 融合） |
+| + 拒答自愈（阶段 5） | ↑ | — | ↑ | 救回 over-refusal（recall 够高却误拒） |
+| + 缺口自愈（阶段 6） | 覆盖原 8 道 unanswerable | — | — | 自动联网补库，原拒答题变可答 |
+| + Reflexion（阶段 8） | 幻觉率 ↓ | — | — | 拦截"无依据断言"，仍不过则降级拒答 |
+
+`scripts/evaluate.py` 输出的核心指标：`accuracy`（裁判=2 比例）、`partial_rate`、`refusal_rate`、
+`recall_top1/recall_top3`、`avg_latency_s`、`healed_count`（阶段5 救回数）。**横向比两次 run 的数字**即知优化是否生效。
+
+## 十、已知限制（诚实清单）
+
+1. **数据源是起步包**：语料为 FastAPI 官方中文文档（41 篇），文档里**没有完整代码示例**
+   （代码是占位符引用），"怎么写代码"类问题答不了——这恰好是阶段 6 自愈的演示素材。
+2. **依赖外网**：阶段 6 联网调研走 DuckDuckGo HTML 版（免 Key、纯 urllib），某些网络环境会被限流；
+   失败优雅降级（不抛异常、不入库）。生产建议换商业搜索 API（接口已可注入）。
+3. **防投毒靠"人工转 active"**：阶段 6 自动补的内容只进 `staging`，绝不自动进主库；
+   转 active 由阶段 7 体检报告提示、人工执行（最后一公里）。
+4. **矛盾检测只做文档内**：跨文档矛盾需按 embedding 聚类再细查（成本高，暂未做）。
+5. **Reflexion 也是 LLM 判断**：可能误判；默认 `REFLECT_MAX_RETRY=1` 控成本，按需开启 `--reflect`。
+6. **token 为估算值**：`字符数/4` 启发式，非精确（见 `core/tracing.py`）。
+7. **非分布式**：Milvus 用 Lite（本地文件），向量库同进程 upsert 后立即可检索；
+   跨进程部署需显式 `ensure_loaded`（见 `core/storage/vec_store.py` 注释）。
+
+## 十一、简历 bullets（定稿）
+
+> 一个"能自己学习、自己体检、自己核查"的 RAG Agent，从 0 到 1 全栈落地。
+
+- **数据层**：实现 Markdown/PDF/DOCX/HTML 格式无关的切片器，bge 向量 + PostgreSQL 双存储（向量库只存 ID，原文与元数据落 PG，支持事务与按元数据过滤）。
+- **检索层**：纯向量 + BM25 关键词混合检索（RRF 倒数排名融合，消除量纲差异），基于 `eval_run` 做 A/B 评估驱动优化。
+- **生成层**：抽离 `generate_answer` 单一事实来源，CLI / FastAPI / Streamlit 三入口共用，杜绝口径漂移。
+- **自愈闭环（Self-Evolving 核心）**：① 拒答自愈（阶段5，识别 over-refusal 换策略重试）；② 缺口自愈（阶段6，联网调研→LLM 生成→质量门禁→写影子库→再答），并设计"影子库 + LLM 门禁 + 未验证标签"三重防投毒。
+- **质检闭环**：开发知识库体检 Agent（阶段7，检测过时/矛盾/僵尸/重复四类问题并产出 Markdown 健康报告）；引入 Reflexion 事实核查（阶段8，无依据断言自动重检索/重写，仍不过则降级拒答）。
+- **可观测**：链路追踪落 PG（`trace_log`：召回/分数/prompt/耗时/估算 token/反射结果），配合 LLM-as-judge 评估闭环量化效果。
+- **工程纪律**：纯标准库 urllib 实现联网调研（零重依赖），全链路可注入桩做单测，依赖/配置/模型后端均可通过环境变量插拔。
+
+---
+
+*生成时间：2026-09-09（地基）｜ 运行入口更新：2026-09-11（阶段1~10）｜ 文档补全：2026-09-11（阶段7/8/9）｜ 前端：2026-09-11（阶段10 React + RAGFlow 风格）｜ 语料来源：github.com/fastapi/fastapi @master (docs/zh/docs)*
+

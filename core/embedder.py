@@ -19,8 +19,14 @@ class BaseEmbedder(ABC):
     dim: int = 0
 
     @abstractmethod
-    def encode_docs(self, texts: List[str]) -> np.ndarray:
-        """文档侧编码（入库时用）"""
+    def encode_docs(self, texts: List[str], progress_cb=None) -> np.ndarray:
+        """
+        文档侧编码（入库时用）。
+
+        :param progress_cb: 可选回调 progress_cb(frac)（frac 0~1）。给了就走"手动分批"路径，
+                            每批编码完回调一次，供异步上传的"向量化"进度条使用；
+                            不给就走一次性快路径（性能最优）。
+        """
         ...
 
     @abstractmethod
@@ -50,16 +56,40 @@ class BGEEmbedder(BaseEmbedder):
             self.model.get_sentence_embedding_dimension
         self.dim = int(getter())
 
-    def encode_docs(self, texts: List[str]) -> np.ndarray:
+    def encode_docs(self, texts: List[str], progress_cb=None) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.dim), dtype="float32")
-        return self.model.encode(
-            texts,
-            batch_size=config.EMBED_BATCH_SIZE,
-            normalize_embeddings=True,      # 归一化后内积 == 余弦相似度
-            show_progress_bar=False,
-            convert_to_numpy=True,
-        ).astype("float32")
+
+        # 快路径：不关心进度时，一次性交给 sentence-transformers（它内部也会分批，通常更快）
+        if progress_cb is None:
+            return self.model.encode(
+                texts,
+                batch_size=config.EMBED_BATCH_SIZE,
+                normalize_embeddings=True,      # 归一化后内积 == 余弦相似度
+                show_progress_bar=False,
+                convert_to_numpy=True,
+            ).astype("float32")
+
+        # 慢路径（可观测）：手动按批迭代，每批编码完回报一次 frac。
+        # 入库时"向量化"往往是最耗时的一步，异步进度条需要这里的细粒度进度。
+        bs = max(1, int(config.EMBED_BATCH_SIZE))
+        n = len(texts)
+        parts = []
+        for i in range(0, n, bs):
+            batch = texts[i:i + bs]
+            parts.append(self.model.encode(
+                batch,
+                batch_size=bs,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+            ))
+            try:
+                progress_cb(min(1.0, (i + len(batch)) / n))
+            except Exception:
+                # 进度回调不能影响入库主流程：吞掉异常继续
+                pass
+        return np.vstack(parts).astype("float32")
 
     def encode_query(self, text: str) -> np.ndarray:
         # bge 官方建议：检索任务中，查询侧加指令前缀
