@@ -48,6 +48,30 @@ echo " PG 容器  : $PG_CONTAINER (localhost:$PG_PORT, 用户=$PG_USER, 库=$PG_
 echo " pip 源   : $PIP_INDEX"
 echo ""
 
+# ---------- 防误用：这个脚本是给"干净本地机器"用的，别在云服务器上跑 ----------
+# 云上（/opt/rag-agent）已经有：git 代码 + venv + 已下好的模型 + 已有数据的向量库
+# + 原生 PostgreSQL。在这里重跑本脚本会白建一个 .venv、重下 183MB 模型、
+# 还想用 Docker 起 PG（云上没 Docker）——纯浪费。
+# （CLOUD_MARKER 抽成变量，方便测试与自定义；正常不用改）
+CLOUD_MARKER="${CLOUD_MARKER:-/opt/rag-agent}"
+if [ -d "$CLOUD_MARKER" ] && [ "${FORCE:-0}" != "1" ]; then
+    cat <<GUARD
+✗ 检测到 $CLOUD_MARKER 存在 —— 这看起来是**云服务器**，不是干净的本地机器。
+
+  本脚本是给"干净本地机器"用的（建 venv / 下模型 / Docker 起 PG）。
+  云上请改用专门脚本，它会复用已有的 venv / 模型 / 向量库 / 原生 PostgreSQL：
+
+      bash scripts/setup_cloud.sh
+      FRONTEND=1 bash scripts/setup_cloud.sh     # 顺带装 Node + 构建前端
+      SYSTEMD=1  bash scripts/setup_cloud.sh     # 顺便写 systemd 常驻服务
+
+  详见 docs/15-云服务器部署.md
+
+  （确实要强行在云上跑本脚本？FORCE=1 bash scripts/setup_new_machine.sh）
+GUARD
+    exit 1
+fi
+
 # ============================================================================
 # [1/6] 环境检查
 # ============================================================================

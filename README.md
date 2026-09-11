@@ -246,6 +246,7 @@ bash scripts/setup_new_machine.sh
 | 入口 | 文件 | 用途 | 启动命令 |
 | --- | --- | --- | --- |
 | **环境搭建** | `scripts/setup_new_machine.sh` | **新人/换机器**：全本地一键搭建（装依赖 + 下模型 + 起 PG + 写 .env） | `bash scripts/setup_new_machine.sh` |
+| **云上部署** | `scripts/setup_cloud.sh` | **云服务器**：复用已有部署，只补缺失依赖 + 校验配置/数据（+可选 Node 构建前端、systemd） | `bash scripts/setup_cloud.sh`　`FRONTEND=1`… `SYSTEMD=1`… |
 | 环境搭建 | `scripts/setup_local.sh` | 作者本人：本地开发复用自己云上 PG + 向量库 | `RAG_CLOUD_HOST=root@你的IP bash scripts/setup_local.sh` |
 | 命令行 | `scripts/ask.py` | 终端问答 / 调试 | `python scripts/ask.py "FastAPI 怎么做依赖注入？" [--retrieval hybrid] [--self-heal] [--agent-heal] [--reflect] [--trace]` |
 | 自愈 CLI | `scripts/heal_knowledge.py` | 阶段6 缺口自愈 / Demo | `python scripts/heal_knowledge.py "知识库没有的概念" [--site docs.python.org] [--file q.txt]` |
@@ -287,6 +288,7 @@ bash scripts/setup_new_machine.sh      # 全本地一键搭建（装依赖+下�
 - `docs/12-前端-React知识库页面.md`（阶段10：仿 RAGFlow 风格的前端 + 知识库管理 API）
 - `docs/13-项目完整介绍与操作手册.md`（★ **推荐先读这份**：技术栈 / 目录结构 / 从入口开始的完整使用流程 / 5 个页面操作详解 / 14 个 API / 存储模型 / 排障 FAQ）
 - `docs/14-拉取代码后如何跑起来.md`（★ **新人上手 / 换机器**：哪些东西不在 git 里、怎么补、三种场景、常见报错速查）
+- `docs/15-云服务器部署.md`（★ **云上部署**：本地 vs 云上 6 处差异、2 个硬阻塞、安全组/监听地址、systemd、前端两种上法）
 
 ---
 
