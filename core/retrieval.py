@@ -51,3 +51,54 @@ def retrieve(question: str, emb, vec, pg, top_k: int = 5) -> List[Tuple[float, D
             continue                            # 极端情况：向量有 ID 但 PG 没这行，跳过
         out.append((score, c))
     return out
+
+
+def hybrid_retrieve(question: str, emb, vec, pg, bm25,
+                    top_k: int = 5, vector_top_n: int = 20, bm25_top_n: int = 20,
+                    rrf_k: int = 60) -> List[Tuple[float, Dict[str, Any]]]:
+    """
+    阶段 4 混合检索：向量语义 + BM25 关键词，用 RRF 融合后取 top_k。
+
+    为什么要混合？
+    - 向量检索：懂语义（"怎么让接口依赖别的东西" → 能找到"依赖注入"），但对精确术语迟钝。
+    - BM25：精确匹配关键词（"Depends"、"HTTPS"），但不懂同义改写。
+    两者互补，混合后通常比单用任一个都稳。
+
+    融合用 RRF（Reciprocal Rank Fusion，倒数排名融合）：
+        fused(d) = Σ  1 / (k + rank_list(d))
+    即：对每个候选块，把它在「各条召回列表里的排名」换算成分数再加总。
+    - 用**排名**而不是原始分数很关键：向量分是余弦(0~1)，BM25 分是无上界的实数，
+      量纲完全不同，直接加权相加会被 BM25 的数值大小带跑偏；换成排名就没有量纲问题。
+    - k=60 是 RRF 论文里的经典取值（k 越大，排名靠前的优势越不明显）。
+
+    :param bm25:        BM25 实例（已 build 过索引）；传 None 就退化成纯向量（见下）
+    :param vector_top_n / bm25_top_n: 两条链路各自先召回多少（要比 top_k 大，给融合留余量）
+    :param rrf_k:       RRF 公式里的平滑常数
+    :return: [(fused_score, chunk_dict), ...] 按融合分降序，长度 ≤ top_k
+    """
+    # 1) 向量语义召回
+    qv = emb.encode_query(question)
+    vec_hits = vec.search(qv, top_k=vector_top_n)      # [(chunk_id, cosine), ...]
+    # 2) BM25 关键词召回
+    bm_hits = bm25.search(question, top_n=bm25_top_n)  # [(chunk_id, bm25_score), ...]
+
+    # 3) RRF 融合：按排名加权
+    fused = {}
+    for rank, (cid, _score) in enumerate(vec_hits, 1):
+        fused[cid] = fused.get(cid, 0.0) + 1.0 / (rrf_k + rank)
+    for rank, (cid, _score) in enumerate(bm_hits, 1):
+        fused[cid] = fused.get(cid, 0.0) + 1.0 / (rrf_k + rank)
+
+    # 4) 按融合分降序取 top_k
+    ordered = sorted(fused.items(), key=lambda x: -x[1])[:top_k]
+
+    # 5) 回表拿原文（和 retrieve() 一样，Milvus 只有 ID）
+    chunk_ids = [cid for cid, _ in ordered]
+    chunks = pg.get_chunks_by_ids(chunk_ids)
+    out = []
+    for cid, score in ordered:
+        c = chunks.get(cid)
+        if not c:
+            continue
+        out.append((score, c))
+    return out

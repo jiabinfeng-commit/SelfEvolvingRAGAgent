@@ -38,6 +38,7 @@ from core.storage.pg_store import PGStore
 from core.storage.vec_store import VecStore
 from core import llm as llm_mod
 from core.evaluator import run_evaluation, JUDGE_SYSTEM_PROMPT
+from core.bm25 import BM25
 
 
 def load_questions(limit: int = None) -> list:
@@ -82,6 +83,10 @@ def main():
     ap = argparse.ArgumentParser(description="阶段 3：RAG 端到端评估")
     ap.add_argument("--limit", type=int, default=None, help="只跑前 N 题（自测用，省 token）")
     ap.add_argument("--top-k", type=int, default=config.RAG_TOP_K)
+    ap.add_argument("--retrieval", choices=["vector", "hybrid"], default="vector",
+                    help="召回方式：vector=纯向量(阶段1~3 基线)；hybrid=向量+BM25 混合(阶段4)")
+    ap.add_argument("--self-heal", action="store_true",
+                    help="阶段5：开启 Agent 自愈（模型拒答且召回分够高时，换宽松指令+扩大召回重试一次）")
     ap.add_argument("--no-save", action="store_true", help="跑但不写 eval_run/eval_result 表")
     ap.add_argument("--output", default=None, help="Markdown 报告输出路径")
     args = ap.parse_args()
@@ -108,12 +113,27 @@ def main():
     # 3. 取评测集 + 拿 LLM（生成答案 + 当裁判 复用同一个）
     questions = load_questions(args.limit)
     llm = llm_mod.get_llm()
-    print(f"评估 {len(questions)} 题，后端 {config.LLM_BACKEND}/{config.LLM_MODEL} ...\n")
+
+    # 阶段 4：混合检索模式下先建 BM25 关键词索引（全量块只读一次，后面每题复用）
+    bm25 = None
+    if args.retrieval == "hybrid":
+        print("构建 BM25 关键词索引 ...", end="", flush=True)
+        t0 = time.time()
+        all_chunks = pg.get_all_chunks()
+        bm25 = BM25().build([
+            (c["chunk_id"], f"{c.get('heading') or ''}\n{c.get('content') or ''}")
+            for c in all_chunks
+        ])
+        print(f" {time.time()-t0:.1f}s（{len(all_chunks)} 块）")
+
+    print(f"评估 {len(questions)} 题，检索={args.retrieval}，"
+          f"后端 {config.LLM_BACKEND}/{config.LLM_MODEL} ...\n")
 
     # 4. 跑评估（生成 + 裁判 + 聚合）
     t0 = time.time()
     results, summary = run_evaluation(
-        questions, args.top_k, llm, emb, vec, pg, limit=args.limit
+        questions, args.top_k, llm, emb, vec, pg,
+        limit=args.limit, bm25=bm25, self_heal=args.self_heal
     )
     elapsed = time.time() - t0
 
@@ -125,6 +145,8 @@ def main():
     if summary["refusal_rate"] is not None:
         print(f"  拒答正确率: {summary['refusal_rate']*100:.1f}%")
     print(f"  召回 top1: {summary['recall_top1']*100:.1f}%   top3: {summary['recall_top3']*100:.1f}%")
+    if summary.get("healed_count"):
+        print(f"  自愈救回: {summary['healed_count']} 题（首轮拒答 → 重试后给出答案）")
     print("=" * 70)
     for r in results:
         print(f"  [{r['judge_label']}] #{r['qid']} {r['question'][:30]}")
@@ -137,7 +159,7 @@ def main():
     else:
         run_id = pg.save_eval(
             config.LLM_MODEL, config.LLM_BACKEND, args.top_k, summary, results,
-            note=f"limit={args.limit}",
+            note=f"retrieval={args.retrieval};self_heal={args.self_heal};limit={args.limit}",
         )
         print(f"\n（已写入 eval_run id={run_id} ✓）")
 

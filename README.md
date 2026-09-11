@@ -193,4 +193,30 @@ git tag v0.0-corpus
 
 ---
 
-*生成时间：2026-09-09 | 语料来源：github.com/fastapi/fastapi @master (docs/zh/docs)*
+## 七、运行入口（阶段 1~5 全链路）
+
+语料与评测集只是地基。真正能跑的 RAG Agent 在 `core/` + `scripts/` 里，三个入口共用同一份问答逻辑（`core/rag.generate_answer`）：
+
+| 入口 | 文件 | 用途 | 启动命令 |
+| --- | --- | --- | --- |
+| 命令行 | `scripts/ask.py` | 终端问答 / 调试 | `python scripts/ask.py "FastAPI 怎么做依赖注入？" [--retrieval hybrid] [--self-heal]` |
+| HTTP 服务 | `scripts/serve.py` | 阶段4 服务化（FastAPI） | `python scripts/serve.py` → http://127.0.0.1:8000/docs |
+| 页面 | `scripts/ui.py` | 阶段5 可视化（Streamlit） | `streamlit run scripts/ui.py` → http://localhost:8501 |
+
+前置（PG 走 SSH 隧道连云上）：
+```bash
+bash scripts/tunnel_pg.sh          # 开隧道（.env 里 PG_HOST=localhost）
+```
+
+各阶段详解见 `docs/`：
+- `docs/01-阶段1-切片与双存储.md`
+- `docs/02-阶段2-RAG闭环.md`
+- `docs/03-阶段3-评估闭环.md`
+- `docs/04-阶段4-检索优化与自进化闭环.md`（算法层：BM25 混合检索）
+- `docs/05-阶段5-Agent自愈.md`（逻辑层：拒答检测 + 重试）
+- `docs/06-阶段4-服务化.md`（服务层：FastAPI）
+- `docs/07-阶段5-streamlit页面.md`（UI 层：Streamlit）
+
+---
+
+*生成时间：2026-09-09（地基）｜ 运行入口更新：2026-09-11（阶段1~5）| 语料来源：github.com/fastapi/fastapi @master (docs/zh/docs)*

@@ -168,6 +168,23 @@ class PGStore:
         # 保持顺序
         return {cid: result[cid] for cid in chunk_ids if cid in result}
 
+    def get_all_chunks(self) -> List[Dict]:
+        """
+        取出全库 chunk（阶段 4：给 BM25 建关键词索引用）。
+
+        只在启动混合检索时调用一次，把 494 块读进内存建索引。
+        生产环境块数很大时，应该换成「在数据库侧建全文索引（PG 的 tsvector）」，
+        这里块数少，直接全量拉最省事。
+        """
+        sql = """
+            SELECT c.chunk_id, c.content, c.heading, d.doc_name
+            FROM chunk c JOIN document d ON c.doc_id = d.doc_id
+        """
+        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+        return [dict(r) for r in rows]
+
     def count(self) -> Dict[str, int]:
         with self.conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM document")

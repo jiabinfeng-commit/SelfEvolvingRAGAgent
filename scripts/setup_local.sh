@@ -69,7 +69,8 @@ PG_PORT=5432
 PG_DB=rag
 PG_USER=rag
 # 这里必须是云上 PG 的真实密码（隧道过去用的是云上的账号体系）
-PG_PASSWORD=rag_dev_2026
+# 云上 PG 密码故意不写死在脚本里（否则会随 git 提交泄露），请运行本脚本后手动填入 .env
+PG_PASSWORD=
 
 # 向量库：本地文件，由 setup_local.sh 从云上同步
 MILVUS_PATH=

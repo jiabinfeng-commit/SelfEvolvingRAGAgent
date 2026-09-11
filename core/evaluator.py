@@ -28,8 +28,9 @@ import time
 from typing import List, Dict, Any, Tuple
 
 from core import config
-from core.prompt import build_prompt, SYSTEM_PROMPT
-from core.retrieval import retrieve
+from core.prompt import build_prompt, SYSTEM_PROMPT, RELAXED_SYSTEM_PROMPT
+from core.retrieval import retrieve, hybrid_retrieve
+from core.self_heal import is_refusal, should_heal, SELF_HEAL_TOPK_MULT
 
 
 # 裁判系统指令：定下「严格、基于证据、不编造」的基调
@@ -121,7 +122,8 @@ def grade_answer(question: str, generated: str, q: Dict[str, Any], llm) -> Tuple
 
 
 def run_evaluation(questions: List[Dict], top_k: int, llm, emb, vec, pg,
-                    limit: int = None) -> Tuple[List[Dict], Dict]:
+                    limit: int = None, bm25=None,
+                    self_heal: bool = False) -> Tuple[List[Dict], Dict]:
     """
     跑完整评估：对每题 召回 → 拼 prompt → 调 LLM 生成 → 裁判打分 → 收集指标。
 
@@ -133,6 +135,10 @@ def run_evaluation(questions: List[Dict], top_k: int, llm, emb, vec, pg,
     :param llm: 生成答案 + 当裁判的大模型（复用同一个后端）
     :param emb/vec/pg: 检索三件套
     :param limit: 只跑前 N 题（自测用；None=全量）
+    :param bm25: 阶段 4 —— 传了 BM25 实例就走「混合检索」，不传就走纯向量。
+                 这正是 A/B 对比的开关：同一个评估器，换召回方式，比数字。
+    :param self_heal: 阶段 5 —— 开启 Agent 自愈：模型拒答且召回分够高（判定误拒）时，
+                 换宽松指令 + 扩大 top_k 重试一次。同样是 A/B 开关。
     :return: (results 列表, summary 字典)
     """
     qs = questions[:limit] if limit else questions
@@ -143,8 +149,9 @@ def run_evaluation(questions: List[Dict], top_k: int, llm, emb, vec, pg,
         gold_doc = q.get("gold_doc")
 
         t0 = time.time()
-        # 1) 召回（复用公共 retrieve，保证和线上同一口径）
-        retrieved = retrieve(question, emb, vec, pg, top_k)
+        # 1) 召回（阶段4：给了 bm25 就走混合检索，否则纯向量；两条链路共用后面的生成逻辑）
+        retrieved = hybrid_retrieve(question, emb, vec, pg, bm25, top_k) if bm25 \
+            else retrieve(question, emb, vec, pg, top_k)
         contexts = [c for _, c in retrieved]
         # 2) 拼 prompt（和阶段2 完全一致）
         user_prompt = build_prompt(question, contexts, max_chars=config.RAG_CONTEXT_MAX_CHARS)
@@ -153,6 +160,28 @@ def run_evaluation(questions: List[Dict], top_k: int, llm, emb, vec, pg,
             generated = llm.generate(SYSTEM_PROMPT, user_prompt)
         except RuntimeError as e:
             generated = f"（生成失败: {e}）"
+
+        # 3.5) 阶段 5：Agent 自愈 —— 拒答 + 召回分够高 = 判定「误拒」，换策略重试一次
+        healed = False
+        if self_heal and retrieved and should_heal(generated, retrieved[0][0]):
+            heal_k = max(int(top_k * SELF_HEAL_TOPK_MULT), top_k)
+            try:
+                # ① 扩大召回，给模型更多素材
+                retrieved_h = (hybrid_retrieve(question, emb, vec, pg, bm25, heal_k) if bm25
+                               else retrieve(question, emb, vec, pg, heal_k))
+                contexts_h = [c for _, c in retrieved_h]
+                # ② 换宽松版指令重新生成（把"优先拒答"改成"优先尝试作答"）
+                prompt_h = build_prompt(question, contexts_h,
+                                        max_chars=config.RAG_CONTEXT_MAX_CHARS)
+                ans_h = llm.generate(RELAXED_SYSTEM_PROMPT, prompt_h)
+                # ③ 只有真的不再拒答才采纳；否则保持原样，不自欺欺人
+                if ans_h and not is_refusal(ans_h):
+                    generated = ans_h
+                    retrieved = retrieved_h          # 后续指标按「最终这次召回」算
+                    healed = True
+            except RuntimeError:
+                pass                                  # 自愈失败就当没发生，不影响主流程
+
         # 4) 召回命中（gold_doc 是否在 top1 / top3）—— 这是「检索质量」指标
         docs = [c.get("doc_name") for _, c in retrieved]
         recall_top1 = bool(gold_doc and gold_doc in docs[:1])
@@ -170,6 +199,7 @@ def run_evaluation(questions: List[Dict], top_k: int, llm, emb, vec, pg,
             "judge_score": score,
             "judge_label": label,
             "judge_reason": reason,
+            "self_healed": healed,          # 阶段5：这一题是否被自愈救回来
             "recall_top1": recall_top1,
             "recall_top3": recall_top3,
             "latency_s": round(latency, 2),
@@ -196,5 +226,7 @@ def run_evaluation(questions: List[Dict], top_k: int, llm, emb, vec, pg,
         "recall_top1": round(r1 / n, 3) if n else 0,
         "recall_top3": round(r3 / n, 3) if n else 0,
         "avg_latency_s": round(avg_lat, 2),
+        # 阶段5：有多少题被自愈救回来（触发了重试且新答案不再拒答）
+        "healed_count": sum(1 for r in results if r.get("self_healed")),
     }
     return results, summary
