@@ -2,7 +2,10 @@
 """从 jsdelivr CDN 下载 FastAPI 官方中文文档作为 RAG 语料"""
 import json, os, time, urllib.request
 
-OUT = "/Users/fengjiabin/WorkBuddy/2026-09-09-14-25-42/rag-demo/data/raw"
+# 输出目录基于脚本位置推断（scripts/ 的上一级 = 项目根），
+# 不要写死绝对路径，否则别人 clone 下来跑会直接往不存在的目录写。
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(ROOT, "data", "raw")
 os.makedirs(OUT, exist_ok=True)
 CDN = "https://cdn.jsdelivr.net/gh/fastapi/fastapi@master"
 

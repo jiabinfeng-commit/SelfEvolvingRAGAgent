@@ -149,34 +149,80 @@ rag-demo/
 
 ---
 
-## 五、下一步
+## 五、拉取代码后怎么跑起来（新人上手）
 
-### 立即做：初始化 Git 仓库
+> 手把手详细版见 **`docs/14-拉取代码后如何跑起来.md`**。这里是最短路径。
+
+### 5.0 先搞清：哪些东西**不在** git 里，以及为什么
+
+别人 clone 下来**不能直接跑**，缺的就是下面这些。它们不是"忘了提交"，而是**故意不入库**（体积大 / 含密码 / 可再生产）：
+
+| 不在仓库里 | 体积 | 为什么不入库 | 你要做什么 |
+| --- | --- | --- | --- |
+| `models/BAAI__bge-small-zh-v1.5/` | **183MB** | 模型权重体积大，且能随时重新下载 | `python scripts/fetch_model.py`（走 ModelScope，国内可用） |
+| `data/milvus.db` | 4.2MB | 运行时产物，可从 PG 原文重建 | **通常不用管**：首次入库会自动建；想有数据就跑 `python scripts/ingest.py` |
+| `.env` | — | **含真实密码，推上去=社死** | `cp .env.example .env` 再填 |
+| `.venv/` | 1.4GB | 依赖装在本地，不入库 | `pip install -r requirements.txt` |
+| `frontend/node_modules/` | 195MB | 同上 | `cd frontend && npm install` |
+| `frontend/dist/` | 1.3MB | 构建产物 | 开发用 `npm run dev`；要部署才 `npm run build` |
+| `corpus/clean/`（41 篇） | 380KB | ✅ **已经入库了** | 什么都不用做，可直接入库 |
+| `eval/questions.json`（50 题） | — | ✅ **已经入库了** | 什么都不用做 |
+
+> **不要**为了"让别人能跑"就把 `models/` 和 `data/` 提交进 git——183MB 的模型和向量库塞进 git 会让 clone 变成几分钟，而且向量库和模型版本必须匹配，别人拿到你的 `milvus.db` 配上自己下的模型反而容易出错。**正确做法是让别人自己生成**：下模型 + 重新入库（几分钟的事，`corpus/clean` 已入库所以离线可做）。
+
+### 5.1 最短路径（记得把 LLM 二选一）
 
 ```bash
-cd /Users/fengjiabin/WorkBuddy/2026-09-09-14-25-42/rag-demo
-git init
-cat > .gitignore <<'EOF'
-__pycache__/
-*.pyc
-.venv/
-data/raw/
-data/milvus.db
-.env
-EOF
-git add .
-git commit -m "chore: 初始化语料与评测集（41篇文档 + 50条评测题）"
-git tag v0.0-corpus
+git clone <仓库地址> && cd Self_Evolving_RAG_Agent
+
+# ① 后端依赖（国内强烈建议加清华源，torch 走默认源会慢到怀疑人生）
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple/
+
+# ② embedding 模型（183MB，从 ModelScope 下，不需翻墙）
+.venv/bin/python scripts/fetch_model.py
+
+# ③ 起一个 PostgreSQL（本地 Docker 最省事；云上 PG 那套见 docs/14）
+docker run -d --name rag-pg -p 5432:5432 \
+  -e POSTGRES_USER=rag -e POSTGRES_PASSWORD=rag_dev -e POSTGRES_DB=rag postgres:16
+
+# ④ 配置
+cp .env.example .env
+#   至少改这两个：PG_PASSWORD=rag_dev，以及 LLM 部分（见下）
+${EDITOR:-vi} .env
+
+# ⑤ 入库（把已在仓库里的 corpus/clean 灌进 PG + Milvus）
+.venv/bin/python scripts/ingest.py
+
+# ⑥ 起服务：后端起 8000，前端起 5173
+.venv/bin/python scripts/api.py                  # → http://127.0.0.1:8000/docs
+cd frontend && npm install && npm run dev        # → http://127.0.0.1:5173
 ```
 
-> `data/raw/` 不进 Git（可由 `fetch_docs.py` 重新生成）；`data/clean/` 建议进库，保证可复现。
+**LLM 二选一**（`.env` 里改）：
 
-### 然后进入阶段 1
+| 方案 | 配置 | 说明 |
+| --- | --- | --- |
+| 云 API（推荐，快） | `LLM_BACKEND=openai`<br>`LLM_MODEL=qwen3.7-max`<br>`OPENAI_API_KEY=sk-xxx`<br>`OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1` | 阿里云百炼 / 任意 OpenAI 兼容端点 |
+| 纯本地免费 | `LLM_BACKEND=ollama`<br>`LLM_MODEL=qwen2.5:7b` | 需先装 [Ollama](https://ollama.com) 并 `ollama pull qwen2.5:7b` |
 
-对照 `SelfEvolving-RAG-Agent-实施路线图.md` 的阶段 1：
-1. 解析：`data/clean/` 下全是 markdown，直接读即可（**这一步你比别人轻松，不用啃 PDF**）
-2. 切片：实现 `FixedChunker` + `StructuralChunker` 两种
-3. 双存储：Milvus Lite（向量）+ PostgreSQL（chunk 原文）
+**一条命令版**（把上面 ①②③④ 自动做完，然后你自己跑 ⑤⑥）：
+
+```bash
+bash scripts/setup_new_machine.sh
+```
+
+> 另有 `scripts/setup_local.sh`，那是**作者本人**"本地开发复用自己云上 PG + 向量库"用的，
+> 需要你自己的云主机 + SSH 隧道，新人不适用（脚本会明确提示而不是去连陌生服务器）。
+
+### 5.2 启动后的自检清单
+
+| # | 命令 | 期望 |
+| --- | --- | --- |
+| 1 | `.venv/bin/python -c "from core import config; print(config.validate())"` | `[]` |
+| 2 | `curl localhost:8000/api/health` | `{"status":"ok", ...}`（degraded = PG 没通） |
+| 3 | `curl localhost:8000/api/stats` | documents/chunks/vectors 都有数字 |
+| 4 | 打开 `localhost:5173` | 顶栏状态灯绿色 `● 在线` |
 
 ---
 
@@ -199,6 +245,8 @@ git tag v0.0-corpus
 
 | 入口 | 文件 | 用途 | 启动命令 |
 | --- | --- | --- | --- |
+| **环境搭建** | `scripts/setup_new_machine.sh` | **新人/换机器**：全本地一键搭建（装依赖 + 下模型 + 起 PG + 写 .env） | `bash scripts/setup_new_machine.sh` |
+| 环境搭建 | `scripts/setup_local.sh` | 作者本人：本地开发复用自己云上 PG + 向量库 | `RAG_CLOUD_HOST=root@你的IP bash scripts/setup_local.sh` |
 | 命令行 | `scripts/ask.py` | 终端问答 / 调试 | `python scripts/ask.py "FastAPI 怎么做依赖注入？" [--retrieval hybrid] [--self-heal] [--agent-heal] [--reflect] [--trace]` |
 | 自愈 CLI | `scripts/heal_knowledge.py` | 阶段6 缺口自愈 / Demo | `python scripts/heal_knowledge.py "知识库没有的概念" [--site docs.python.org] [--file q.txt]` |
 | 体检 CLI | `scripts/health_check.py` | 阶段7 知识库体检 | `python scripts/health_check.py [--no-conflict] [--report out.md]` |
@@ -211,10 +259,18 @@ git tag v0.0-corpus
 > - `--reflect`（阶段 8）：生成答案后做一次事实核查，发现无依据的断言就重检索/重写，仍不通过则降级为安全拒答。
 > - `--trace`（阶段 8）：把本次问答的召回/分数/prompt/耗时/估算 token/反射结果写入 `trace_log` 表，供可观测看板。
 
-前置（PG 走 SSH 隧道连云上）：
+首次运行/换了机器/别人拉取代码 → **先看第五节**（或 `docs/14-拉取代码后如何跑起来.md`）：
+
 ```bash
-bash scripts/tunnel_pg.sh          # 开隧道（.env 里 PG_HOST=localhost）
+bash scripts/setup_new_machine.sh      # 全本地一键搭建（装依赖+下模型+起PG+写.env）
+.venv/bin/python scripts/ingest.py     # 入库
+.venv/bin/python scripts/api.py        # 起后端
 ```
+
+> 如果你（作者）的 PG 在云上，开发前先开隧道；该脚本**必须显式指定云主机**，故意不给默认值：
+> ```bash
+> RAG_CLOUD_HOST=root@你的IP bash scripts/tunnel_pg.sh    # .env 里 PG_HOST=localhost
+> ```
 
 各阶段详解见 `docs/`：
 - `docs/01-阶段1-切片与双存储.md`
@@ -230,6 +286,7 @@ bash scripts/tunnel_pg.sh          # 开隧道（.env 里 PG_HOST=localhost）
 - `docs/11-阶段9-包装发布.md`（阶段9：架构图 / 效果对比表 / 已知限制 / 简历 bullets）
 - `docs/12-前端-React知识库页面.md`（阶段10：仿 RAGFlow 风格的前端 + 知识库管理 API）
 - `docs/13-项目完整介绍与操作手册.md`（★ **推荐先读这份**：技术栈 / 目录结构 / 从入口开始的完整使用流程 / 5 个页面操作详解 / 14 个 API / 存储模型 / 排障 FAQ）
+- `docs/14-拉取代码后如何跑起来.md`（★ **新人上手 / 换机器**：哪些东西不在 git 里、怎么补、三种场景、常见报错速查）
 
 ---
 

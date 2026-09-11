@@ -6,14 +6,23 @@
 """
 import json, os, sys
 
-ROOT = "/Users/fengjiabin/PycharmProjects/Self_Evolving_RAG_Agent"
-RAW = os.path.join(ROOT, "data/raw")
-Q_FILE = os.path.join(ROOT, "eval/questions.json")
+# ROOT 基于脚本位置推断（eval/ 的上一级 = 项目根）。
+# 早期版本写死了 /Users/xxx/...，别人 clone 下来会直接 FileNotFoundError。
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+Q_FILE = os.path.join(ROOT, "eval", "questions.json")
+
+# 语料优先用 corpus/clean（已入 git，clone 下来就有）；
+# 没有再退回 data/raw（需要先跑 fetch_docs.py + clean_corpus.py 生成）
+CLEAN_DIR = os.path.join(ROOT, "corpus", "clean")
+RAW_DIR = os.path.join(ROOT, "data", "raw")
+CORPUS_DIR = CLEAN_DIR if os.path.isdir(CLEAN_DIR) else RAW_DIR
+if not os.path.isdir(CORPUS_DIR):
+    sys.exit(f"找不到语料目录：{CLEAN_DIR} 和 {RAW_DIR} 都不存在")
 
 corpus = {}
-for f in os.listdir(RAW):
+for f in os.listdir(CORPUS_DIR):
     if f.endswith(".md"):
-        corpus[f] = open(os.path.join(RAW, f), encoding="utf-8").read()
+        corpus[f] = open(os.path.join(CORPUS_DIR, f), encoding="utf-8").read()
 
 full_text = "\n".join(corpus.values())
 data = json.load(open(Q_FILE, encoding="utf-8"))

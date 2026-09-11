@@ -15,8 +15,32 @@
 # ============================================================================
 set -euo pipefail
 
-CLOUD_HOST="${RAG_CLOUD_HOST:-root@120.26.22.166}"
+# 云主机地址：**必须显式指定**，故意不给默认值。
+# 原因：① 仓库可能被别人 clone，默认指向某个人的服务器会让脚本去连陌生主机；
+#       ② 服务器 IP 不该硬编码进代码。用法见文件头的 RAG_CLOUD_HOST。
+CLOUD_HOST="${RAG_CLOUD_HOST:-}"
 LOCAL_PORT="${RAG_LOCAL_PG_PORT:-5432}"
+
+if [ -z "$CLOUD_HOST" ]; then
+    cat <<'TIP'
+✗ 未指定云主机地址（RAG_CLOUD_HOST）
+
+  用法：
+      RAG_CLOUD_HOST=root@你的服务器IP bash scripts/tunnel_pg.sh
+
+  例：
+      RAG_CLOUD_HOST=root@1.2.3.4 bash scripts/tunnel_pg.sh
+
+  不想每次都敲？在 ~/.zshrc 里加一行（只在你本机生效，不会进 git）：
+      export RAG_CLOUD_HOST=root@1.2.3.4
+
+  ⚠ 没有云主机 / 不想用隧道？改用本地 Docker 起 PG 就行，不需要这个脚本：
+      docker run -d --name rag-pg -p 5432:5432 \
+        -e POSTGRES_USER=rag -e POSTGRES_PASSWORD=你的密码 -e POSTGRES_DB=rag postgres:16
+    然后把 .env 的 PG_HOST 设为 localhost 即可。（详见 docs/14-拉取代码后如何跑起来.md）
+TIP
+    exit 1
+fi
 
 # 端口占用检查
 if lsof -nP -iTCP:"$LOCAL_PORT" -sTCP:LISTEN >/dev/null 2>&1; then

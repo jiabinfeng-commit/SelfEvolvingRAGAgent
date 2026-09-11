@@ -10,14 +10,35 @@
 # 本地真正要装的只有 Python 依赖 + 模型，约 400MB。
 #
 # 用法：
-#   bash scripts/setup_local.sh
-#   RAG_CLOUD_HOST=root@1.2.3.4 bash scripts/setup_local.sh   # 换机器
+#   RAG_CLOUD_HOST=root@你的服务器IP bash scripts/setup_local.sh
+#   RAG_CLOUD_HOST=root@1.2.3.4 RAG_LOCAL_PG_PORT=5433 bash scripts/setup_local.sh
+#
+# ⚠ 这个脚本**专为"本地开发复用云上数据服务"设计**，需要你有自己的云主机。
+#   如果你只是个想跑起来的新人（没有云主机、也不想申请），别用这个脚本，
+#   改用完全本地化的路径（本地 Docker 起 PG + 重新入库）：
+#       bash scripts/setup_new_machine.sh
+#   或者看 docs/14-拉取代码后如何跑起来.md 手把手走一遍。
 # ============================================================================
 set -euo pipefail
 
-CLOUD_HOST="${RAG_CLOUD_HOST:-root@120.26.22.166}"
+CLOUD_HOST="${RAG_CLOUD_HOST:-}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+# 必须显式指定云主机：故意不给默认值，否则别人 clone 下来会去连脚本作者的服务器。
+if [ -z "$CLOUD_HOST" ]; then
+    cat <<'TIP'
+✗ 未指定云主机地址（RAG_CLOUD_HOST）
+
+  用法：
+      RAG_CLOUD_HOST=root@你的服务器IP bash scripts/setup_local.sh
+
+  ⚠ 没有云主机？这个脚本不适合你。用全本地的那套：
+      bash scripts/setup_new_machine.sh
+    或看 docs/14-拉取代码后如何跑起来.md
+TIP
+    exit 1
+fi
 
 echo "项目根: $ROOT"
 echo "云主机: $CLOUD_HOST"

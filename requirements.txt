@@ -1,0 +1,57 @@
+# =============================================================================
+# Self-Evolving RAG Agent —— 后端依赖
+#
+# 安装：
+#     pip install -r requirements.txt
+#
+# 国内加速（强烈建议，torch 走默认源会慢到怀疑人生）：
+#     pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple/
+#
+# ★ torch 特别注意（本文件故意不锁 torch 版本）：
+#   sentence-transformers 会连带把 torch 拉下来，Linux 上 pip 默认给的是
+#   **CUDA 版（2~3GB）**。如果你只是跑 CPU，先手动装 CPU 版再装本文件，能省 90% 时间：
+#     # 直接下 +cpu 的 wheel（该目录是扁平文件列表，不能当 PEP503 索引用 -i）
+#     curl -O https://mirrors.aliyun.com/pytorch-wheels/cpu/torch-2.x.x%2Bcpu-cp3xx-...whl
+#     pip install ./torch-2.x.x+cpu-*.whl
+#   然后：
+#     pip install -r requirements.txt
+#
+# 环境要求：Python >= 3.11（实测 3.13 可用）
+# =============================================================================
+
+# ---------- Web 服务（阶段 4 / 阶段 10 前端 API）----------
+fastapi>=0.115
+uvicorn>=0.30
+pydantic>=2.7
+# 上传接口用 UploadFile/Form 必须装它，否则 FastAPI 启动就报
+# "Form data requires python-multipart to be installed"
+python-multipart>=0.0.9
+
+# ---------- 存储 ----------
+# PostgreSQL：存 chunk 原文与元数据
+psycopg2-binary>=2.9
+# 向量库：pymilvus 是客户端，milvus-lite 是嵌入式服务端（数据就是一个本地文件/目录，
+# 不需要另外起 Milvus 服务）。两个都要装，少一个都会在连库时报错。
+pymilvus>=3.0
+milvus-lite>=3.0
+
+# ---------- Embedding（会连带装 torch / transformers，体积最大的一坨）----------
+sentence-transformers>=3.0
+numpy>=1.26
+
+# ---------- 配置 ----------
+python-dotenv>=1.0
+
+# ---------- 可选：只有跑 Streamlit 老页面（scripts/ui.py）才需要 ----------
+streamlit>=1.35
+
+# ---------- 可选：只有跑自测（fastapi.testclient）才需要 ----------
+httpx>=0.27
+
+# ---------- 可选：上传 PDF / DOCX 才需要 ----------
+# 前端上传组件 accept 里包含了 .pdf / .docx，但要真解析这两种格式必须有下面两个库。
+# core/chunker.py 里是**懒加载**的：没装不会导致启动失败，
+# 只在你上传对应文件时抛出带安装提示的 RuntimeError。
+# 不需要这两个格式可以不装，能省约 10MB。
+pdfplumber>=0.11          # 解析 PDF（import 名就是 pdfplumber）
+python-docx>=1.1          # 解析 DOCX（import 名是 docx，别装成 docx 那个同名包）
