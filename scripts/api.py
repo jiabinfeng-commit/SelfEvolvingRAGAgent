@@ -777,7 +777,7 @@ def ask(req: AskRequest):
                 top_k=req.top_k,
                 retrieval=req.retrieval,
                 pg=STATE["pg"], emb=STATE["emb"], vec=STATE["vec"],
-                backend_llm=STATE["llm"], bm25=STATE["bm25"], save=req.save,
+                backend_llm=STATE["llm"], bm25=STATE["bm25"], save=req.save, trace=req.trace,
                 reranker=STATE["reranker"],
             )
         return generate_answer(

@@ -238,7 +238,7 @@ cat <<'NEXT'
 
  ★ 第 0 步（重要）：编辑 .env 的 LLM 部分，二选一
      A) 用云 API（快）：LLM_BACKEND=openai
-                        LLM_MODEL=qwen3.7-max
+                        LLM_MODEL=qwen3.7-flash-2026-07-15
                         OPENAI_API_KEY=sk-xxx
                         OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
      B) 纯本地免费  ：LLM_BACKEND=ollama

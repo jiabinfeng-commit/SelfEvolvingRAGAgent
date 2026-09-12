@@ -83,6 +83,7 @@ from core.storage.vec_store import VecStore
 from core import llm as llm_mod
 from core.rag import generate_answer
 from core.self_heal import is_refusal
+from core.tracing import TraceRecorder
 
 
 # ================================================================
@@ -119,7 +120,7 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 # 所以进"联网调研循环"之前先做一次**带超时的 TCP 探测**：
 #   不通 → 直接跳过调研、保持拒答，几秒内就返回明确原因。
 # 探测目标可在 .env 里用 NET_PROBE_HOST / NET_PROBE_PORT 覆盖（换了搜索后端就改它们）。
-NET_PROBE_HOST = os.getenv("NET_PROBE_HOST", "html.duckduckgo.com")
+NET_PROBE_HOST = os.getenv("NET_PROBE_HOST", "www.bing.com")
 NET_PROBE_PORT = int(os.getenv("NET_PROBE_PORT", "443"))
 NET_PROBE_TIMEOUT = float(os.getenv("NET_PROBE_TIMEOUT", "3"))
 
@@ -142,22 +143,6 @@ def _strip_tags(s: str) -> str:
     s = html.unescape(s)                   # &amp; → &, &#39; → ' 等
     s = re.sub(r"\s+", " ", s).strip()     # 多空白压成一个空格
     return s
-
-
-def _extract_ddg_url(href: str) -> Optional[str]:
-    """
-    从 DuckDuckGo 的跳转链接里解出真实 URL。
-
-    DDG HTML 版的每条结果 href 不是直链，而是形如：
-        /l/?uddg=https%3A%2F%2Fexample.com%2Fpage&amp;rut=...
-    真实地址在 uddg= 这个参数里（URL 编码）。我们把它解出来即可。
-    """
-    if href.startswith("http://") or href.startswith("https://"):
-        return href
-    m = re.search(r"uddg=([^&]+)", href)
-    if m:
-        return urllib.parse.unquote(m.group(1))
-    return None
 
 
 def probe_net(host: str = None, port: int = None,
@@ -189,7 +174,7 @@ def probe_net(host: str = None, port: int = None,
 def web_search(query: str, top_n: int = 5, site: str = None,
                timeout: int = 10) -> Tuple[List[SearchHit], Optional[str]]:
     """
-    通用网页搜索（无 API Key，走 DuckDuckGo HTML 版）。
+    通用网页搜索（无 API Key，走 Bing 网页版）。
 
     :param query: 搜索词
     :param top_n: 最多返回几条
@@ -198,41 +183,69 @@ def web_search(query: str, top_n: int = 5, site: str = None,
     :return: (SearchHit 列表, 错误信息或 None)。失败时返回空列表 + 原因，
              调用方据此优雅降级（不抛异常，避免自愈循环崩掉）。
 
-    为什么用 DDG HTML 而不是某家搜索 API？
-    - 免 Key、免付费、纯标准库就能打，符合项目"依赖精简"的纪律；
-    - 牺牲点：稳定性不如商业 API，某些网络环境会被限流。所以这里失败时
-      只返回空 + 原因，由上层决定是否换 query 重试。
+    为什么从 DuckDuckGo 切到 Bing？
+    - 实测：国内网络访问 duckduckgo / google 这类境外站点会卡在 TCP SYN_SENT
+      （既连不上也不被拒绝），probe_net 也探不到，于是整条联网补库链路哑火；
+      而 bing.com / baidu.com 的 443 在国内是通的，NET_PROBE_HOST 已默认指向
+      www.bing.com，搜索后端自然也要跟着换，否则"网关说可达、实际抓不到"。
+    - 依旧免 Key、免付费、纯标准库 urllib 就能打，符合项目"依赖精简"的纪律；
+      代价是稳定性不如商业 API、可能被限流，所以失败时只返回空 + 原因，
+      由上层决定是否换 query 重试。
+
+    Bing 结果页结构（HTML 版）：每条自然结果包在 <li class="b_algo"> 里，
+    广告块是 b_ad（不取）；标题在块内的 <h2><a href="真实直链">标题</a>，
+    少数布局下 <h2> 不带属性或标题 <a> 不在 h2 里，所以先按 h2 取、取不到
+    再退化到"块内第一个 http(s) 外链 <a>"；摘要在块内第一个 <p>
+    （.b_caption > p 或 p.b_paractl）。
     """
     q = f"{query} site:{site}" if site else query
-    url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote_plus(q)
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
+    url = "https://www.bing.com/search?q=" + urllib.parse.quote_plus(q)
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": _UA, "Accept-Language": "zh-CN,zh;q=0.9"},
+    )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             page = r.read().decode("utf-8", errors="ignore")
     except Exception as e:
         return [], f"搜索请求失败: {e}"
 
-    # 1) 抓标题链接（结果__a 是 DDG 标题锚点的固定 class）
     hits: List[SearchHit] = []
-    for m in re.finditer(r'class="result__a"[^>]*href="([^"]+)"', page):
-        href = m.group(1)
-        seg = page[m.end(): m.end() + 400]          # 标题文本就在 href 之后一小段
-        tm = re.search(r">(.*?)</a>", seg, re.S)
-        title = _strip_tags(tm.group(1)) if tm else ""
-        real = _extract_ddg_url(href)
-        if real:
-            hits.append(SearchHit(title=title, url=real))
+    # 每条自然结果都在 <li class="b_algo"> 里（广告块 b_ad 不取）
+    for m in re.finditer(r'<li class="b_algo"[^>]*>(.*?)</li>', page, re.S):
+        block = m.group(1)
+        link = None
+        title = ""
+        # 1) 标题优先从 <h2> 里取外链 <a>（Bing 标题 <a> 通常就包在 h2 中）
+        h2m = re.search(r'<h2[^>]*>(.*?)</h2>', block, re.S)
+        if h2m:
+            am = re.search(r'<a\b[^>]*href="(https?://[^"]+)"', h2m.group(1))
+            if am:
+                link = am.group(1)
+                seg = h2m.group(1)[am.start(): am.start() + 600]
+                tm = re.search(r'<a\b[^>]*href="[^"]+"[^>]*>(.*?)</a>', seg, re.S)
+                title = _strip_tags(tm.group(1)) if tm else ""
+        # 2) 退化：块内第一个 http(s) 外链 <a>（兼容标题不在 h2 的布局）
+        if not link:
+            am = re.search(r'<a\b[^>]*href="(https?://[^"]+)"', block)
+            if am:
+                link = am.group(1)
+                seg = block[am.start(): am.start() + 600]
+                tm = re.search(r'<a\b[^>]*href="[^"]+"[^>]*>(.*?)</a>', seg, re.S)
+                title = _strip_tags(tm.group(1)) if tm else ""
+        if not link:
+            continue
+        # 3) 摘要：块内第一个 <p>（Bing 把摘要放在 .b_caption > p 或 p.b_paractl）
+        pm = re.search(r'<p[^>]*>(.*?)</p>', block, re.S)
+        snippet = _strip_tags(pm.group(1)) if pm else ""
+        # Bing 自然结果大多是直链；个别跳转链接（/ck/a?...）非 http 开头就跳过
+        if link.startswith("http"):
+            hits.append(SearchHit(title=title, url=link, snippet=snippet))
         if len(hits) >= top_n:
             break
 
-    # 2) 抓摘要（result__snippet 是 DDG 摘要的固定 class），按出现顺序配对
-    snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', page, re.S)
-    snippets = [_strip_tags(s) for s in snippets]
-    for i, h in enumerate(hits):
-        h.snippet = snippets[i] if i < len(snippets) else ""
-
     if not hits:
-        return [], "DDG 未返回结果（可能被限流或当前网络受限）"
+        return [], "Bing 未返回结果（可能被限流或当前网络受限）"
     return hits, None
 
 
@@ -519,10 +532,40 @@ def _annotate(res: Dict[str, Any], pg: PGStore) -> Dict[str, Any]:
     return res
 
 
+def _record_self_heal_trace(pg: PGStore, answer_dict: Dict[str, Any],
+                            question: str, retrieval: str) -> None:
+    """
+    阶段 8：把"一次自愈请求的最终答案"落一条 trace。
+
+    run_self_heal 内部会调两次 generate_answer（首答 + 自愈后重答），
+    为避免一次请求写两条 trace，这里统一在流程末尾只记录**最终返回给用户**的那一版。
+    可观测是旁路：任何异常都吞掉，绝不影响主回答流程。
+    """
+    try:
+        recalled = answer_dict.get("retrieved") or []
+        recorder = TraceRecorder(pg)
+        recorder.record(
+            question=question,
+            retrieval=retrieval,
+            backend=config.LLM_BACKEND,
+            recalled_ids=[c.get("chunk_id") for c in recalled],
+            recalled_scores=[float(c.get("score", 0.0)) for c in recalled],
+            prompt=answer_dict.get("prompt", ""),
+            answer=answer_dict.get("answer", ""),
+            latency_s=float(answer_dict.get("latency_s", 0.0)),
+            reflected=bool(answer_dict.get("reflected", False)),
+            reflect_pass=answer_dict.get("reflect_pass"),
+            request_id=answer_dict.get("request_id"),
+        )
+    except Exception as e:
+        # 追踪写库失败绝不能影响主回答流程（可观测是旁路）
+        print(f"[trace] 写入失败（已忽略）: {e}")
+
+
 def run_self_heal(question: str, *, top_k: int = None, retrieval: str = "vector",
                   pg: PGStore = None, vec: VecStore = None, emb=None,
                   backend_llm=None, bm25=None, max_steps: int = 3,
-                  site: str = None, save: bool = True,
+                  site: str = None, save: bool = True, trace: bool = False,
                   search_fn=None, fetch_fn=None, reranker=None) -> Dict[str, Any]:
     """
     阶段 6 总入口：对一个问题跑完整"自愈闭环"。
@@ -544,6 +587,7 @@ def run_self_heal(question: str, *, top_k: int = None, retrieval: str = "vector"
     :param max_steps:   调研重试上限（防死循环，路线图风险清单点名的要求）
     :param site:        限定调研站点域名（可选）
     :param save:        是否把问答写入 qa_log
+    :param trace:       阶段 8：是否把链路写入 trace_log
     :param search_fn:   搜索后端（默认 web_search）。可注入别的实现（如商业搜索 API），
                        接口需为 (query, top_n, site, timeout) -> (List[SearchHit], err)
     :param fetch_fn:    抓取后端（默认 fetch_page）。接口需为 (url, timeout) -> (text, err)
@@ -574,10 +618,12 @@ def run_self_heal(question: str, *, top_k: int = None, retrieval: str = "vector"
         steps: List[str] = []
 
         # —— 第 1 步：阶段 5 库内自愈首答 ——
+        # 注意：这里 trace=False —— 阶段 8 链路追踪由 run_self_heal 在流程末尾统一落一条，
+        # 避免一次自愈请求因内部两次 generate_answer 而写两条 trace。
         first = generate_answer(
             question, top_k=top_k, retrieval=retrieval, self_heal=True,
-            save=save, emb=emb, vec=vec, pg=pg, backend_llm=backend_llm, bm25=bm25,
-            reranker=reranker,
+            save=save, trace=False, emb=emb, vec=vec, pg=pg,
+            backend_llm=backend_llm, bm25=bm25, reranker=reranker,
         )
         top_score = first["retrieved"][0]["score"] if first["retrieved"] else None
         steps.append(f"库内首答: refusal={first['refusal']}, top_score={top_score}")
@@ -590,92 +636,100 @@ def run_self_heal(question: str, *, top_k: int = None, retrieval: str = "vector"
             first["gap_reason"] = reason
             first["self_healed_by_agent"] = False
             first["steps"] = steps
-            return _annotate(first, pg)
+            result = first
+        else:
+            # —— 第 3 步：缺口存在 → 联网调研循环 ——
+            steps.append(f"缺口判定: {reason} → 进入联网调研（最多 {max_steps} 轮）")
+            searched: List[str] = []
+            draft = ""
+            passed = False
+            score = 0.0
+            detail: dict = {}
 
-        # —— 第 3 步：缺口存在 → 联网调研循环 ——
-        steps.append(f"缺口判定: {reason} → 进入联网调研（最多 {max_steps} 轮）")
-        searched: List[str] = []
-        draft = ""
-        passed = False
-        score = 0.0
-        detail: dict = {}
+            # 进循环前先探一次网络（见 probe_net 的说明）。不通就一轮都不跑：
+            # 境外站点在受限网络下会卡在 SYN_SENT，硬等 max_steps × timeout 会让
+            # 请求拖到超时、还会占着服务线程。这里几秒内失败并给出明确原因，
+            # 之后 draft 仍为空串、passed 仍为 False，自然走到下面的"保持拒答"兜底。
+            reachable, probe_msg = probe_net()
+            steps.append(f"联网探测: {probe_msg}")
 
-        # 进循环前先探一次网络（见 probe_net 的说明）。不通就一轮都不跑：
-        # 境外站点在受限网络下会卡在 SYN_SENT，硬等 max_steps × timeout 会让
-        # 请求拖到超时、还会占着服务线程。这里几秒内失败并给出明确原因，
-        # 之后 draft 仍为空串、passed 仍为 False，自然走到下面的"保持拒答"兜底。
-        reachable, probe_msg = probe_net()
-        steps.append(f"联网探测: {probe_msg}")
+            for step in range(max_steps if reachable else 0):
+                q = _research_query(question, step)
+                hits, err = search_fn(q, top_n=5, site=site)
+                if err:
+                    steps.append(f"第{step + 1}轮: 搜索失败({err})")
+                    break
+                searched.extend([h.url for h in hits])
+                steps.append(f"第{step + 1}轮: 搜到 {len(hits)} 条结果")
 
-        for step in range(max_steps if reachable else 0):
-            q = _research_query(question, step)
-            hits, err = search_fn(q, top_n=5, site=site)
-            if err:
-                steps.append(f"第{step + 1}轮: 搜索失败({err})")
-                break
-            searched.extend([h.url for h in hits])
-            steps.append(f"第{step + 1}轮: 搜到 {len(hits)} 条结果")
+                # 抓前 3 个页面的正文
+                pages = []
+                for h in hits[:3]:
+                    text, e = fetch_fn(h.url)
+                    if text:
+                        pages.append(f"# {h.title}\n{h.url}\n{text}")
+                crawled = "\n\n".join(pages)[:MAX_CRAWL_CHARS]
 
-            # 抓前 3 个页面的正文
-            pages = []
-            for h in hits[:3]:
-                text, e = fetch_fn(h.url)
-                if text:
-                    pages.append(f"# {h.title}\n{h.url}\n{text}")
-            crawled = "\n\n".join(pages)[:MAX_CRAWL_CHARS]
+                # 生成草稿 + 质量门禁
+                draft = draft_document(question, crawled, backend_llm)
+                passed, score, detail = quality_gate(
+                    draft, question, backend_llm, existing=first["retrieved"])
+                steps.append(
+                    f"  生成草稿({len(draft)}字) → 门禁 {score:.2f} "
+                    f"{'✅通过' if passed else '❌不通过'}: {detail.get('reason', '')}"
+                )
+                if passed:
+                    break   # 门禁通过，停止调研
 
-            # 生成草稿 + 质量门禁
-            draft = draft_document(question, crawled, backend_llm)
-            passed, score, detail = quality_gate(
-                draft, question, backend_llm, existing=first["retrieved"])
-            steps.append(
-                f"  生成草稿({len(draft)}字) → 门禁 {score:.2f} "
-                f"{'✅通过' if passed else '❌不通过'}: {detail.get('reason', '')}"
-            )
+            # —— 第 4 步：门禁通过 → 写影子库 → 重新问答 ——
             if passed:
-                break   # 门禁通过，停止调研
+                # doc_id 按问题哈希稳定生成：同一个问题多次自愈不会重复建文档（幂等）
+                doc_id = "agent_" + hashlib.md5(question.encode("utf-8")).hexdigest()[:16]
+                doc_name = f"[agent] {question[:40]}"
+                n = ingest_shadow(pg, vec, emb, doc_id, doc_name, draft)
+                steps.append(f"写影子库: {n} 个 chunk（status=staging, source=agent_generated）")
 
-        # —— 第 4 步：门禁通过 → 写影子库 → 重新问答 ——
-        if passed:
-            # doc_id 按问题哈希稳定生成：同一个问题多次自愈不会重复建文档（幂等）
-            doc_id = "agent_" + hashlib.md5(question.encode("utf-8")).hexdigest()[:16]
-            doc_name = f"[agent] {question[:40]}"
-            n = ingest_shadow(pg, vec, emb, doc_id, doc_name, draft)
-            steps.append(f"写影子库: {n} 个 chunk（status=staging, source=agent_generated）")
+                # 重新问答：复用同一个 vec 实例（Milvus Lite 同进程 upsert 后即可检索到新块；
+                # 若 vec 是服务单例也一样，因为就是同一个 client）。bm25=None 则按最新 PG 重建，
+                # 保证新写入的 staging 块也能被关键词召回。
+                final = generate_answer(
+                    question, top_k=top_k, retrieval=retrieval, self_heal=False,
+                    save=save, trace=False, emb=emb, vec=vec, pg=pg,
+                    backend_llm=backend_llm, bm25=None, reranker=reranker,
+                )
+                final["gap_detected"] = True
+                final["gap_reason"] = reason
+                final["searched"] = searched
+                final["draft"] = draft
+                final["quality_pass"] = passed
+                final["quality_score"] = score
+                final["quality_detail"] = detail
+                final["ingested_chunks"] = n
+                final["shadow_doc_id"] = doc_id
+                final["self_healed_by_agent"] = True
+                final["steps"] = steps
+                result = final
+            else:
+                # —— 兜底：调研失败，保持原拒答，诚实返回 ——
+                first["gap_detected"] = True
+                first["gap_reason"] = reason
+                first["searched"] = searched
+                first["draft"] = draft
+                first["quality_pass"] = passed
+                first["quality_score"] = score
+                first["quality_detail"] = detail
+                first["ingested_chunks"] = 0
+                first["self_healed_by_agent"] = False
+                first["steps"] = steps
+                result = first
 
-            # 重新问答：复用同一个 vec 实例（Milvus Lite 同进程 upsert 后即可检索到新块；
-            # 若 vec 是服务单例也一样，因为就是同一个 client）。bm25=None 则按最新 PG 重建，
-            # 保证新写入的 staging 块也能被关键词召回。
-            final = generate_answer(
-                question, top_k=top_k, retrieval=retrieval, self_heal=False,
-                save=save, emb=emb, vec=vec, pg=pg, backend_llm=backend_llm, bm25=None,
-                reranker=reranker,
-            )
-            final["gap_detected"] = True
-            final["gap_reason"] = reason
-            final["searched"] = searched
-            final["draft"] = draft
-            final["quality_pass"] = passed
-            final["quality_score"] = score
-            final["quality_detail"] = detail
-            final["ingested_chunks"] = n
-            final["shadow_doc_id"] = doc_id
-            final["self_healed_by_agent"] = True
-            final["steps"] = steps
-            return _annotate(final, pg)
+        # —— 阶段 8：整条自愈流程只在末尾落一条 trace ——
+        # 一次 HTTP 请求 = 一条 trace 记录（无论走哪个分支、内部几次 generate_answer）。
+        # 落的是"最终返回给用户的那版答案"，而不是中间的首答/重试。
+        if trace and result is not None:
+            _record_self_heal_trace(pg, result, question, retrieval)
 
-        # —— 兜底：调研失败，保持原拒答，诚实返回 ——
-        first["gap_detected"] = True
-        first["gap_reason"] = reason
-        first["searched"] = searched
-        first["draft"] = draft
-        first["quality_pass"] = passed
-        first["quality_score"] = score
-        first["quality_detail"] = detail
-        first["ingested_chunks"] = 0
-        first["self_healed_by_agent"] = False
-        first["steps"] = steps
-        return _annotate(first, pg)
+        return _annotate(result, pg)
     finally:
         # 只有本函数自己创建的 pg 才负责关闭；注入的由调用方管理
         if own_pg:

@@ -224,6 +224,8 @@ def generate_answer(question: str,
         return {
             "question": question,
             "answer": answer,
+            # prompt 一并返回：阶段 8 链路追踪（run_self_heal 末尾统一落 trace）需要它
+            "prompt": user_prompt,
             "retrieved": [
                 {
                     "chunk_id": c.get("chunk_id"),

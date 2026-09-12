@@ -199,7 +199,7 @@ if [ -n "$ERRS" ]; then
         echo "  ★ 这是云上最常见的坑：.env 里 LLM_BACKEND=openai 但没有 OPENAI_API_KEY。"
         echo "    往 $CODE_DIR/.env 补上这四行（和本地 .env 里的一致）："
         echo "        LLM_BACKEND=openai"
-        echo "        LLM_MODEL=qwen3.7-max"
+        echo "        LLM_MODEL=qwen3.7-flash-2026-07-15"
         echo "        OPENAI_API_KEY=sk-你的key"
         echo "        OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1"
         echo "    或改用本地 Ollama：LLM_BACKEND=ollama + LLM_MODEL=qwen2.5:7b"

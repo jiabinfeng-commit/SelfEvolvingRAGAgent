@@ -144,7 +144,7 @@ RERANKER_CANDIDATE_TOP_N = _getint("RERANKER_CANDIDATE_TOP_N", 20)
 #   openai  —— 任意 OpenAI 兼容 API（如 gpt-4o-mini、DeepSeek、通义百炼等），需要 API Key
 LLM_BACKEND = _get("LLM_BACKEND", "openai")
 # ollama 模式填模型名（如 qwen3.7-max / llama3）；openai 模式填模型 id（如 gpt-4o-mini）
-LLM_MODEL = _get("LLM_MODEL", "qwen3.7-max")
+LLM_MODEL = _get("LLM_MODEL", "qwen3.7-flash-2026-07-15")
 OLLAMA_URL = _get("OLLAMA_URL", "http://localhost:11434")
 OPENAI_API_KEY = _get("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = _get("OPENAI_BASE_URL", "")
