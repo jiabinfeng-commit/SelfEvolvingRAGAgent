@@ -45,32 +45,37 @@ class Reranker:
     def _load(self):
         # auto / cross：尝试加载跨编码器
         if self.mode in ("cross", "auto"):
-            # 离线环境（无代理/无网）保险：临时置 HF/TRANSFORMERS 离线，
-            # 这样 cross 模型「只在本地已缓存时才加载」，否则立刻抛错退回 bi，
-            # 绝不会因为去 HuggingFace 下载而卡住首次请求。
-            import os
-            _prev_hf = os.environ.get("HF_HUB_OFFLINE")
-            _prev_tf = os.environ.get("TRANSFORMERS_OFFLINE")
-            os.environ["HF_HUB_OFFLINE"] = "1"
-            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            # 【必须用 local_files_only=True 禁止隐式下载 —— 这里踩过一个大坑】
+            #
+            # 原来这里是用"临时把 HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE 置 1"来防下载的，
+            # 但那个做法**完全不生效**：huggingface_hub 在 **import 时**就把 HF_HUB_OFFLINE
+            # 读进了模块常量（huggingface_hub.constants.HF_HUB_OFFLINE），之后再改
+            # os.environ 不会改变已固化的常量。实测：
+            #     import 之后            常量 = False
+            #     运行时把它设成 "1" 之后  常量 = False    ← 没变
+            # 后果：CrossEncoder 会真的去下载 BAAI/bge-reranker-v2-m3（约 **2.27GB**）。
+            #
+            # 以前之所以没出事，纯属侥幸：当时 HF 官方源在国内连不通，下载秒速失败、
+            # 自动退到 bi 模式，所以掩盖了这个 bug。一旦配了 HF 镜像
+            # （见 core/config.py 的 HF_ENDPOINT=hf-mirror.com），网络通了，
+            # 这 2.27GB 就会在**第一个请求里静默开下**，把服务拖死、把磁盘和带宽吃光。
+            #
+            # local_files_only=True 才是真正可靠的开关：只在本地缓存里找，
+            # 找不到立刻抛异常 → 被下面的 except 捕获 → 退 bi 模式。
+            # 想用 cross 提精度，就显式把模型下到本地（scripts/fetch_model.py），
+            # 之后这里会自动用上 —— 这仍是原设计的"零改动升级"体验，只是不再偷偷下载。
             try:
                 from sentence_transformers import CrossEncoder
-                self.model = CrossEncoder(self.model_name, device="cpu", max_length=512)
+                self.model = CrossEncoder(
+                    self.model_name, device="cpu", max_length=512,
+                    local_files_only=True,
+                )
                 self.available = True
                 self.mode = "cross"
                 return
             except Exception as e:
-                # cross 失败（模型没下 / 没网 / 硬件不支持）-> 记一笔，往下退 bi
-                print(f"[reranker] cross 模式加载失败，退到 bi 模式: {e}")
-            finally:
-                if _prev_hf is None:
-                    os.environ.pop("HF_HUB_OFFLINE", None)
-                else:
-                    os.environ["HF_HUB_OFFLINE"] = _prev_hf
-                if _prev_tf is None:
-                    os.environ.pop("TRANSFORMERS_OFFLINE", None)
-                else:
-                    os.environ["TRANSFORMERS_OFFLINE"] = _prev_tf
+                # cross 失败（模型没下到本地 / 硬件不支持）-> 记一笔，往下退 bi
+                print(f"[reranker] cross 模式不可用（未预下载或加载失败），退到 bi 模式: {e}")
         # bi：复用已有 embedding 模型，无需下载
         if self.mode in ("bi", "auto") and self.embedder is not None:
             self.available = True

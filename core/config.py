@@ -126,8 +126,15 @@ QUERY_PREFIX = _get("QUERY_PREFIX", "为这个句子生成表示以用于检索�
 # 默认开。模式：auto = 优先 cross-encoder（BAAI/bge-reranker-v2-m3），
 # 加载不到（模型没下/没网）就自动退 bi（复用现有 bge embedding，零下载）。
 # cross 模式需要把模型下到本地；下载后可设 RERANKER_MODEL 指向本地目录，auto 会自动用上。
+# 防御性：本地模型目录存在时优先用它（此时 RERANKER_MODEL 没在 .env 显式设置才会走到这里）。
+# 注意：若 .env 里写了非空 RERANKER_MODEL（如默认的 HF id），本回退不触发，
+#       需靠 scripts/fetch_model.py 下载后把本地路径写回 .env。
+_LOCAL_RERANKER = os.path.join(MODEL_ROOT, "BAAI__bge-reranker-v2-m3")
 RERANKER_ENABLED = _getbool("RERANKER_ENABLED", True)
-RERANKER_MODEL = _get("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
+RERANKER_MODEL = _get(
+    "RERANKER_MODEL",
+    _LOCAL_RERANKER if os.path.isdir(_LOCAL_RERANKER) else "BAAI/bge-reranker-v2-m3",
+)
 RERANKER_MODE = _get("RERANKER_MODE", "auto")            # cross / bi / auto
 RERANKER_CANDIDATE_TOP_N = _getint("RERANKER_CANDIDATE_TOP_N", 20)
 
