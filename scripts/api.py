@@ -86,6 +86,9 @@ from core.agent import run_self_heal
 from core.ingest import ingest_file
 from core.retrieval import retrieve, hybrid_retrieve
 from core.health_check import run_health_check
+from core.logging_setup import init_logging, get_logger
+init_logging()
+logger = get_logger(__name__)
 
 
 # ================================================================

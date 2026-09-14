@@ -27,6 +27,12 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+# 把项目根加到 sys.path，让本脚本也能用统一日志基建
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.logging_setup import init_logging, get_logger
+init_logging()
+logger = get_logger(__name__)
+
 API_LIST = "https://modelscope.cn/api/v1/models/{model}/repo/files?Revision=master&Recursive=true"
 API_FILE = "https://modelscope.cn/api/v1/models/{model}/repo?Revision=master&FilePath={path}"
 

@@ -10,7 +10,13 @@
 用法：python scripts/clean_corpus.py
 输出：corpus/clean/（清洗后的纯净 markdown）
 """
-import os, re
+import os, re, sys
+
+# 把项目根加到 sys.path，让本脚本也能用统一日志基建
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.logging_setup import init_logging, get_logger
+init_logging()
+logger = get_logger(__name__)
 
 # 动态定位项目根目录，避免路径写死导致换机器就跑不了
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

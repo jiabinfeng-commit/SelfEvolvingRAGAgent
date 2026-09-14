@@ -47,6 +47,9 @@ from core.health_check import run_health_check
 from core.storage.pg_store import PGStore
 from core.embedder import get_embedder
 from core import llm as llm_mod
+from core.logging_setup import init_logging, get_logger
+init_logging()
+logger = get_logger(__name__)
 
 
 # ================================================================

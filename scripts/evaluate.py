@@ -39,6 +39,9 @@ from core.storage.vec_store import VecStore
 from core import llm as llm_mod
 from core.evaluator import run_evaluation, JUDGE_SYSTEM_PROMPT
 from core.bm25 import BM25
+from core.logging_setup import init_logging, get_logger
+init_logging()
+logger = get_logger(__name__)
 
 
 def load_questions(limit: int = None) -> list:

@@ -25,6 +25,9 @@ from core.chunker import get_chunker, Chunk, parse_file, SUPPORTED_EXTENSIONS
 from core.embedder import get_embedder
 from core.storage.pg_store import PGStore
 from core.storage.vec_store import VecStore
+from core.logging_setup import init_logging, get_logger
+init_logging()
+logger = get_logger(__name__)
 
 
 def load_corpus(corpus_dir: str, limit: int = None):

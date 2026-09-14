@@ -154,6 +154,13 @@ RAG_TOP_K = _getint("RAG_TOP_K", 5)
 RAG_CONTEXT_MAX_CHARS = _getint("RAG_CONTEXT_MAX_CHARS", 1200)
 
 
+# ---------- 日志级别（阶段 10 可观测性） ----------
+# 控制全局日志详细度：DEBUG / INFO / WARNING / ERROR。
+# 在脚本入口调用 core.logging_setup.init_logging() 时读取；
+# 临时想调更细/更粗，用环境变量 RAG_LOG_LEVEL 覆盖最快（不必改 .env）。
+LOG_LEVEL = _get("RAG_LOG_LEVEL", "INFO").upper()
+
+
 # ---------- 校验 ----------
 def validate() -> list:
     """

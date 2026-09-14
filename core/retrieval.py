@@ -89,7 +89,7 @@ def hybrid_retrieve(question: str, emb, vec, pg, bm25,
     for rank, (cid, _score) in enumerate(bm_hits, 1):
         fused[cid] = fused.get(cid, 0.0) + 1.0 / (rrf_k + rank)
 
-    # 4) 按融合分降序排（先不切片，给重排留候选池）
+    # 4) 按融合分降序排（先不切片，给重排留候选池）按"每个元素的第二个分量取负值"来排序
     ordered = sorted(fused.items(), key=lambda x: -x[1])
 
     # 5) 回表拿原文（和 retrieve() 一样，Milvus 只有 ID）

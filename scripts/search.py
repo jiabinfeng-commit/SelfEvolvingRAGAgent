@@ -24,6 +24,9 @@ from core import config
 from core.embedder import get_embedder
 from core.storage.pg_store import PGStore
 from core.storage.vec_store import VecStore
+from core.logging_setup import init_logging, get_logger
+init_logging()
+logger = get_logger(__name__)
 
 
 def retrieve(question: str, emb, vec: VecStore, pg: PGStore, top_k: int = 5):

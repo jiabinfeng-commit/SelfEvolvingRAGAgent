@@ -44,6 +44,11 @@ numpy>=1.26
 # ---------- 配置 ----------
 python-dotenv>=1.0
 
+# ---------- 可观测性（阶段 10：日志） ----------
+# core/logging_setup.py 首选它；没装会自动退化为标准库 logging（仍能跑，只是没颜色/无变量回溯）。
+# 纯 Python、体积小、无 C 扩展，装起来很快。
+loguru>=0.7
+
 # ---------- 可选：只有跑 Streamlit 老页面（scripts/ui.py）才需要 ----------
 streamlit>=1.35
 

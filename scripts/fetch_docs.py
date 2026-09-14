@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 """从 jsdelivr CDN 下载 FastAPI 官方中文文档作为 RAG 语料"""
-import json, os, time, urllib.request
+import json, os, sys, time, urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.logging_setup import init_logging, get_logger
+init_logging()
+logger = get_logger(__name__)
 
 # 输出目录基于脚本位置推断（scripts/ 的上一级 = 项目根），
 # 不要写死绝对路径，否则别人 clone 下来跑会直接往不存在的目录写。

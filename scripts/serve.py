@@ -56,6 +56,9 @@ from core.storage.vec_store import VecStore
 from core import llm as llm_mod
 from core.bm25 import BM25
 from core.rag import generate_answer
+from core.logging_setup import init_logging, get_logger
+init_logging()
+logger = get_logger(__name__)
 
 
 # ---------- 进程级单例：整个服务生命周期只建一次，全程复用 ----------
@@ -120,11 +123,13 @@ async def lifespan(app: FastAPI):
     errs = config.validate()
     if errs:
         raise RuntimeError("配置校验失败: " + "; ".join(errs))
+    logger.info("RAG API 启动，配置摘要：\n{}", config.summary())
     yield
     # 关闭时释放 PG 连接（其余对象随进程退出自动回收）
     with contextlib.suppress(Exception):
         if STATE["pg"] is not None:
             STATE["pg"].close()
+    logger.info("RAG API 关闭")
 
 
 app = FastAPI(

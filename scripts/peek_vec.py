@@ -34,6 +34,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pymilvus import MilvusClient, DataType
 
 from core import config
+from core.logging_setup import init_logging, get_logger
+init_logging()
+logger = get_logger(__name__)
 
 
 def load_if_needed(client: MilvusClient, collection: str):
